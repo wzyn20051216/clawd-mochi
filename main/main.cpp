@@ -148,6 +148,7 @@ input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:
 <button id="bl" class="wide" onclick="backlight()">打开屏幕</button>
 <div class="row"><span>WiFi</span><select id="nets"><option value="">点击扫描</option></select><button class="btn" onclick="scanWifi()">扫描</button></div>
 <div class="row"><span>密码</span><input id="wpwd" type="password" placeholder="WiFi password"><button class="btn" onclick="connectWifi()">连接</button></div>
+<div id="wifiMsg" class="status"></div>
 <button class="wide" onclick="forgetWifi()">断开已保存WiFi</button>
 <div class="grid">
 <button class="btn" onclick="randomFace()">随机表情</button>
@@ -188,8 +189,8 @@ function factoryReset(){closeCanvas(false);if(confirm('恢复默认设置？'))r
 function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\nWiFi状态: '+(j.reason||'正常')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
 function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function scanWifi(){const n=document.getElementById('nets');n.innerHTML='<option>扫描中...</option>';fetch('/wifi/scan',{cache:'no-store'}).then(r=>r.json()).then(j=>{n.innerHTML='';(j.nets||[]).forEach(x=>{const o=document.createElement('option');o.value=x.ssid;o.textContent=x.ssid+' ('+x.rssi+'dBm)';n.appendChild(o)});if(!n.options.length)n.innerHTML='<option value="">没扫到</option>'})}
-function msg(t){const s=document.getElementById('stat');s.classList.add('on');s.innerHTML=t}
-function connectWifi(){const ssid=document.getElementById('nets').value,pwd=document.getElementById('wpwd').value;if(!ssid){alert('先选择 WiFi');return}msg('正在连接 '+ssid+' ...');fetch('/wifi/connect?ssid='+encodeURIComponent(ssid)+'&pwd='+encodeURIComponent(pwd),{cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.connected){msg('连接成功！<br>请跳转到：<a style=\"color:#d65728\" href=\"'+j.url+'\">'+j.url+'</a><br>桥接 host：'+j.ip)}else{msg('连接失败：'+(j.reason||'未知错误')+'<br>请检查密码或距离路由器远近。')}refresh()}).catch(()=>msg('连接请求失败，请重新打开页面再试。'))}
+function msg(t){const s=document.getElementById('wifiMsg');s.classList.add('on');s.innerHTML=t}
+function connectWifi(){const ssid=document.getElementById('nets').value,pwd=document.getElementById('wpwd').value;if(!ssid){alert('先选择 WiFi');return}msg('正在连接 '+ssid+' ...');fetch('/wifi/connect?ssid='+encodeURIComponent(ssid)+'&pwd='+encodeURIComponent(pwd),{cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.connected){msg('连接成功！<br>切换到目标WiFi后请跳转到：<a style=\"color:#d65728\" href=\"'+j.url+'\">'+j.url+'</a><br>桥接 host：'+j.ip)}else{msg('连接失败：'+(j.reason||'未知错误')+'<br>请检查密码或距离路由器远近。')}refresh()}).catch(()=>msg('连接请求失败，请重新打开页面再试。'))}
 function forgetWifi(){if(confirm('断开并清除保存的 WiFi？'))req('/wifi/forget').then(()=>{msg('已断开并清除保存的 WiFi。');refresh()})}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
 function paintCanvasOnly(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH)}
@@ -1247,6 +1248,17 @@ void task_idle_face(void *)
     }
 }
 
+void task_restore_normal_face_once(void *)
+{
+    delay_ms(3000);
+    if (!g_term_mode && g_current_view != kViewCode && g_current_view != kViewDraw) {
+        g_current_view = kViewEyesNormal;
+        draw_face(kFaceNormal);
+    }
+    g_busy = false;
+    vTaskDelete(nullptr);
+}
+
 esp_err_t route_root(httpd_req_t *req)
 {
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
@@ -1424,7 +1436,12 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
     }
     if (g_sta_connected) {
         const std::string ip = sta_ip_text();
+        g_busy = true;
         draw_pet_notice(kFaceHappy, "WiFi OK " + ip);
+        if (xTaskCreate(task_restore_normal_face_once, "restore_face", 3072, nullptr, 4, nullptr) != pdPASS) {
+            draw_face(kFaceNormal);
+            g_busy = false;
+        }
         std::string json = "{\"ok\":1,\"connected\":true,\"ip\":\"";
         json += ip;
         json += "\",\"url\":\"http://";
