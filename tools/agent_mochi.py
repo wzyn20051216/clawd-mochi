@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from mochi_bridge import configure_stdio, resolve_host, send_pet
+from mochi_bridge import configure_stdio, send_pet_auto
 from mochi_event import compact_text, map_event, post_tool_failed
 
 
@@ -22,10 +22,10 @@ def command_to_text(command: list[str]) -> str:
     return " ".join(subprocess.list2cmdline([part]) for part in command)
 
 
-def send_status(host: str, mood: str, text: str, timeout: float) -> None:
+def send_status(host_arg: str | None, mood: str, text: str, timeout: float) -> None:
     """发送状态，失败时不影响 agent 继续运行。"""
     try:
-        send_pet(host, mood, text, timeout)
+        send_pet_auto(host_arg, mood, text, timeout)
     except Exception:
         pass
 
@@ -99,9 +99,9 @@ def claude_event_to_status(event: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
-def run_stream(command: list[str], mode: str, host: str, timeout: float) -> int:
+def run_stream(command: list[str], mode: str, host_arg: str | None, timeout: float) -> int:
     """运行 agent 命令并消费 JSONL 事件流。"""
-    send_status(host, "thinking", mode.title(), timeout)
+    send_status(host_arg, "thinking", mode.title(), timeout)
     process = subprocess.Popen(
         command_to_text(command),
         stdout=subprocess.PIPE,
@@ -123,13 +123,13 @@ def run_stream(command: list[str], mode: str, host: str, timeout: float) -> int:
             continue
         status = mapper(event)
         if status:
-            send_status(host, status[0], status[1], timeout)
+            send_status(host_arg, status[0], status[1], timeout)
 
     return_code = process.wait()
     if return_code == 0:
-        send_status(host, "happy", f"{mode.title()} OK", timeout)
+        send_status(host_arg, "happy", f"{mode.title()} OK", timeout)
     else:
-        send_status(host, "error", f"{mode.title()} FAIL", timeout)
+        send_status(host_arg, "error", f"{mode.title()} FAIL", timeout)
     return return_code
 
 
@@ -154,7 +154,7 @@ def main() -> int:
     if agent_args and agent_args[0] == "--":
         agent_args = agent_args[1:]
     command = build_command(args.mode, agent_args)
-    return run_stream(command, args.mode, resolve_host(args.host), args.timeout)
+    return run_stream(command, args.mode, args.host, args.timeout)
 
 
 if __name__ == "__main__":

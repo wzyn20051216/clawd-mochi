@@ -7,7 +7,7 @@
 ## 当前功能
 
 - ESP32-S3 AP+STA 双模式：保留热点 `ClaWD-Mochi`，也可连接你的正常 WiFi
-- 浏览器控制页面：热点模式 `http://192.168.4.1`，局域网模式使用屏幕显示的 `LAN` 地址
+- 浏览器控制页面：热点模式 `http://192.168.4.1`，局域网模式优先使用 `http://clawd-mochi.local`
 - ST7735 128x160 与 ST7789 240x240 双驱动保留
 - normal eyes / squish eyes / Claude Code / canvas 绘图模式
 - 背光开关、动画速度、背景色、画笔颜色控制
@@ -96,13 +96,20 @@ ST7789 1.54 inch 240x240
 
 清除后会断开 STA 连接，恢复到只使用备用热点的状态。
 
-连接成功后屏幕会显示：
+连接成功后屏幕会显示固定局域网域名和备用 IP：
 
 ```text
-LAN: xxx.xxx.xxx.xxx
+clawd-mochi.local
+xxx.xxx.xxx.xxx
 ```
 
-电脑保持连接同一个正常 WiFi，然后用这个 IP 访问控制页或桥接脚本。
+电脑保持连接同一个正常 WiFi，然后优先打开：
+
+```text
+http://clawd-mochi.local
+```
+
+如果你的 Windows 或路由器没有正确处理 mDNS，再使用屏幕下方显示的备用 IP。
 
 高级用法：也可以在 `idf.py menuconfig` 的 `Clawd Mochi` 菜单里预填 `WiFi station SSID` 和 `WiFi station password`，但日常使用推荐网页配网。
 
@@ -171,25 +178,27 @@ E:\desktop\clawd mochi\build\clawd_mochi_s3.bin
 GET http://192.168.4.1/pet?mood=happy&text=build%20ok
 ```
 
-如果小屏已经连上正常 WiFi，请把 `--host` 换成屏幕显示的 LAN 地址：
+如果小屏已经连上正常 WiFi，优先直接使用固定 mDNS 地址：
 
 ```powershell
-py -3 tools\mochi_bridge.py happy "build ok" --host 192.168.1.23
-py -3 tools\mochi_bridge.py thinking "coding..." --host 192.168.1.23
-py -3 tools\mochi_bridge.py error "build failed" --host 192.168.1.23
+py -3 tools\mochi_bridge.py happy "build ok" --host clawd-mochi.local
+py -3 tools\mochi_bridge.py thinking "coding..." --host clawd-mochi.local
+py -3 tools\mochi_bridge.py error "build failed" --host clawd-mochi.local
 ```
+
+桥接器也会自动尝试：显式 host、环境变量、mDNS 自动发现、保存的 host、`clawd-mochi.local`、`192.168.4.1`，所以多数情况下可以不再手动输入 IP。
 
 也可以先设置环境变量，后续省略 `--host`：
 
 ```powershell
-$env:MOCHI_HOST="192.168.1.23"
+$env:MOCHI_HOST="clawd-mochi.local"
 py -3 tools\mochi_bridge.py thinking "coding..."
 ```
 
 更推荐把当前 LAN 地址保存一次：
 
 ```powershell
-py -3 tools\mochi_bridge.py --set-host 172.20.10.2
+py -3 tools\mochi_bridge.py --set-host clawd-mochi.local
 py -3 tools\mochi_bridge.py --ping
 py -3 tools\mochi_bridge.py --demo
 ```
@@ -226,10 +235,10 @@ py -3 tools\mochi_task.py --name test -- py -3 -m py_compile tools\mochi_bridge.
 | 工具失败 / 任务失败 | 生气 |
 | 等待下一步 | 普通眨眼 |
 
-推荐使用一键安装脚本。把 `172.20.10.2` 换成小屏网页或屏幕上显示的 LAN 地址：
+推荐使用一键安装脚本。现在优先使用固定 mDNS 地址：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHost 172.20.10.2
+powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHost clawd-mochi.local
 ```
 
 安装器会自动完成：

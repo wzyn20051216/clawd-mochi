@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import socket
+import struct
 import sys
 import time
 import urllib.error
@@ -23,6 +24,8 @@ from pathlib import Path
 
 CONFIG_PATH = Path(__file__).with_name(".mochi_host")
 DEFAULT_HOST = "192.168.4.1"
+MDNS_HOST = "clawd-mochi.local"
+MDNS_GROUP = ("224.0.0.251", 5353)
 
 
 MOOD_ALIASES = {
@@ -65,9 +68,97 @@ def save_host(host: str) -> None:
     CONFIG_PATH.write_text(host.strip() + "\n", encoding="utf-8")
 
 
+def normalize_host(host: str) -> str:
+    """把用户可能复制的 URL 规整成 urllib 可直接使用的 host。"""
+    value = host.strip()
+    if value.startswith("http://") or value.startswith("https://"):
+        parsed = urllib.parse.urlparse(value)
+        return parsed.netloc or parsed.path
+    return value.rstrip("/")
+
+
+def encode_dns_name(name: str) -> bytes:
+    """把 clawd-mochi.local 这样的名字编码成 DNS 查询格式。"""
+    parts = name.rstrip(".").split(".")
+    return b"".join(bytes([len(part)]) + part.encode("ascii") for part in parts) + b"\x00"
+
+
+def skip_dns_name(packet: bytes, offset: int) -> int:
+    """跳过 DNS name，支持 mDNS 响应里常见的压缩指针。"""
+    while offset < len(packet):
+        length = packet[offset]
+        if length & 0xC0 == 0xC0:
+            return offset + 2
+        if length == 0:
+            return offset + 1
+        offset += 1 + length
+    return offset
+
+
+def discover_mdns_ipv4(timeout: float = 0.8) -> str | None:
+    """主动查询 mDNS A 记录，避免完全依赖 Windows 的 .local 解析。"""
+    transaction_id = 0
+    header = struct.pack("!HHHHHH", transaction_id, 0, 1, 0, 0, 0)
+    question = encode_dns_name(MDNS_HOST) + struct.pack("!HH", 1, 0x8001)
+    query = header + question
+    deadline = time.monotonic() + timeout
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    try:
+        sock.settimeout(timeout)
+        sock.sendto(query, MDNS_GROUP)
+        while time.monotonic() < deadline:
+            try:
+                packet, _ = sock.recvfrom(1500)
+            except socket.timeout:
+                break
+            if len(packet) < 12:
+                continue
+            _, _, qd_count, an_count, ns_count, ar_count = struct.unpack("!HHHHHH", packet[:12])
+            offset = 12
+            for _ in range(qd_count):
+                offset = skip_dns_name(packet, offset) + 4
+            for _ in range(an_count + ns_count + ar_count):
+                offset = skip_dns_name(packet, offset)
+                if offset + 10 > len(packet):
+                    break
+                rtype, rclass, _, rdlen = struct.unpack("!HHIH", packet[offset:offset + 10])
+                offset += 10
+                rdata = packet[offset:offset + rdlen]
+                offset += rdlen
+                if rtype == 1 and (rclass & 0x7FFF) == 1 and rdlen == 4:
+                    return socket.inet_ntoa(rdata)
+    except OSError:
+        return None
+    finally:
+        sock.close()
+    return None
+
+
+def candidate_hosts(host_arg: str | None) -> list[str]:
+    """生成自动发现顺序：显式配置优先，主动 mDNS 发现，其次保存值和兜底地址。"""
+    discovered = discover_mdns_ipv4()
+    hosts = [
+        host_arg,
+        os.environ.get("MOCHI_HOST"),
+        discovered,
+        load_saved_host(),
+        MDNS_HOST,
+        DEFAULT_HOST,
+    ]
+    result: list[str] = []
+    for host in hosts:
+        if not host:
+            continue
+        normalized = normalize_host(host)
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
+
+
 def resolve_host(host_arg: str | None) -> str:
-    """按命令行、环境变量、保存文件、默认热点地址的优先级选择 host。"""
-    return host_arg or os.environ.get("MOCHI_HOST") or load_saved_host() or DEFAULT_HOST
+    """返回当前最优 host；真正发送时还会继续尝试 mDNS 和热点兜底。"""
+    return candidate_hosts(host_arg)[0]
 
 
 def send_pet(host: str, mood: str, text: str, timeout: float) -> dict:
@@ -80,6 +171,19 @@ def send_pet(host: str, mood: str, text: str, timeout: float) -> dict:
         return json.loads(body or "{}")
     except json.JSONDecodeError:
         return {"raw": body}
+
+
+def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float) -> tuple[str, dict]:
+    """按显式 host、保存 host、mDNS、热点地址依次发送桌宠事件。"""
+    last_error: BaseException | None = None
+    for host in candidate_hosts(host_arg):
+        try:
+            return host, send_pet(host, mood, text, timeout)
+        except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise urllib.error.URLError("no host candidate")
 
 
 def run_demo(host: str, timeout: float) -> None:
@@ -116,7 +220,6 @@ def main() -> int:
         print(f"已保存 host：{args.set_host}")
         return 0
 
-    host = resolve_host(args.host)
     text = " ".join(args.text).strip()
     mood = args.mood or "normal"
     if args.ping:
@@ -125,13 +228,14 @@ def main() -> int:
 
     try:
         if args.demo:
+            host = resolve_host(args.host)
             run_demo(host, args.timeout)
             return 0
-        result = send_pet(host, mood, text, args.timeout)
+        host, result = send_pet_auto(args.host, mood, text, args.timeout)
     except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
         print(f"发送失败：{exc}", file=sys.stderr)
-        print(f"当前 host：{host}", file=sys.stderr)
-        print("请确认电脑和 ESP32 在同一局域网，或者先连接热点 ClaWD-Mochi 后访问 http://192.168.4.1。", file=sys.stderr)
+        print(f"已尝试 host：{', '.join(candidate_hosts(args.host))}", file=sys.stderr)
+        print("请确认电脑和 ESP32 在同一局域网，或先连接热点 ClaWD-Mochi 后访问 http://192.168.4.1。", file=sys.stderr)
         return 1
 
     print(json.dumps(result, ensure_ascii=False))

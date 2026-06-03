@@ -18,6 +18,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "mdns.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
@@ -33,6 +34,8 @@
 namespace {
 
 constexpr const char *kTag = "clawd_mochi";
+constexpr const char *kMdnsHost = "clawd-mochi";
+constexpr const char *kMdnsName = "Clawd Mochi";
 constexpr uint16_t kWhite = 0xFFFF;
 constexpr uint16_t kBlack = 0x0000;
 
@@ -191,7 +194,7 @@ function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(
 function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function scanWifi(){const n=document.getElementById('nets');n.innerHTML='<option>扫描中...</option>';fetch('/wifi/scan',{cache:'no-store'}).then(r=>r.json()).then(j=>{n.innerHTML='';(j.nets||[]).forEach(x=>{const o=document.createElement('option');o.value=x.ssid;o.textContent=x.ssid+' ('+x.rssi+'dBm)';n.appendChild(o)});if(!n.options.length)n.innerHTML='<option value="">没扫到</option>'})}
 function msg(t){const s=document.getElementById('wifiMsg');s.classList.add('on');s.innerHTML=t}
-function connectWifi(){const ssid=document.getElementById('nets').value,pwd=document.getElementById('wpwd').value;if(!ssid){alert('先选择 WiFi');return}msg('正在连接 '+ssid+' ...');fetch('/wifi/connect?ssid='+encodeURIComponent(ssid)+'&pwd='+encodeURIComponent(pwd),{cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.connected){msg('连接成功！<br>切换到目标WiFi后请跳转到：<a style=\"color:#d65728\" href=\"'+j.url+'\">'+j.url+'</a><br>桥接 host：'+j.ip)}else{msg('连接失败：'+(j.reason||'未知错误')+'<br>请检查密码或距离路由器远近。')}refresh()}).catch(()=>msg('连接请求失败，请重新打开页面再试。'))}
+function connectWifi(){const ssid=document.getElementById('nets').value,pwd=document.getElementById('wpwd').value;if(!ssid){alert('先选择 WiFi');return}msg('正在连接 '+ssid+' ...');fetch('/wifi/connect?ssid='+encodeURIComponent(ssid)+'&pwd='+encodeURIComponent(pwd),{cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.connected){msg('连接成功！<br>切换到目标WiFi后请跳转到：<a style=\"color:#d65728\" href=\"'+j.url+'\">'+j.url+'</a><br>备用 IP：<a style=\"color:#d65728\" href=\"http://'+j.ip+'\">http://'+j.ip+'</a><br>桥接 host：'+j.host)}else{msg('连接失败：'+(j.reason||'未知错误')+'<br>请检查密码或距离路由器远近。')}refresh()}).catch(()=>msg('连接请求失败，请重新打开页面再试。'))}
 function forgetWifi(){if(confirm('断开并清除保存的 WiFi？'))req('/wifi/forget').then(()=>{msg('已断开并清除保存的 WiFi。');refresh()})}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
 function paintCanvasOnly(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH)}
@@ -1045,6 +1048,16 @@ std::string sta_ip_text()
     return ip;
 }
 
+/**
+ * @brief 获取桌宠在局域网内的固定 mDNS 主机名。
+ *
+ * @return 形如 clawd-mochi.local 的地址，供屏幕、网页和状态接口展示。
+ */
+std::string mdns_host_text()
+{
+    return std::string(kMdnsHost) + ".local";
+}
+
 bool sta_configured()
 {
     if (g_sta_disabled) {
@@ -1101,11 +1114,11 @@ void draw_wifi_info()
     g_display.setTextColor(g_orange);
     g_display.setCursor(12, 84);
     const std::string ip = sta_ip_text();
-    g_display.print(g_sta_connected ? ip : "192.168.4.1");
+    g_display.print(g_sta_connected ? mdns_host_text() : "192.168.4.1");
     g_display.setTextColor(g_muted);
     g_display.setTextSize(1);
     g_display.setCursor(12, 112);
-    g_display.print(g_sta_connected ? "use --host above" : "fallback AP mode");
+    g_display.print(g_sta_connected ? ip : "fallback AP mode");
     g_display.flush();
 }
 
@@ -1448,7 +1461,9 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
         std::string json = "{\"ok\":1,\"connected\":true,\"ip\":\"";
         json += ip;
         json += "\",\"url\":\"http://";
-        json += ip;
+        json += mdns_host_text();
+        json += "\",\"host\":\"";
+        json += mdns_host_text();
         json += "\"}";
         send_json(req, json.c_str());
     } else {
@@ -1677,9 +1692,9 @@ esp_err_t route_factory(httpd_req_t *req)
 
 esp_err_t route_state(httpd_req_t *req)
 {
-    char json[544];
+    char json[608];
     std::snprintf(json, sizeof(json),
-                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"mdns\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
                   static_cast<unsigned>(g_current_view),
                   static_cast<unsigned>(g_current_face),
                   g_busy ? "true" : "false",
@@ -1692,6 +1707,7 @@ esp_err_t route_state(httpd_req_t *req)
                   rgb888_to_hex(g_bg_rgb).c_str(),
                   json_escape_ascii(sta_ssid(), 32).c_str(),
                   sta_ip_text().c_str(),
+                  g_sta_connected ? mdns_host_text().c_str() : "",
                   g_sta_connected ? "正常" : json_escape_ascii(sta_reason_text(g_sta_last_disconnect_reason), 40).c_str(),
                   static_cast<long long>(esp_timer_get_time() / 1000000),
                   static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
@@ -1699,6 +1715,31 @@ esp_err_t route_state(httpd_req_t *req)
                   g_display.height(),
                   g_display.driverName());
     send_json(req, json);
+    return ESP_OK;
+}
+
+/**
+ * @brief 启动 mDNS 自动发现服务。
+ *
+ * 注册 A 记录和 _http._tcp 服务，让电脑或手机可通过
+ * http://clawd-mochi.local 访问控制页，避免用户手动记录动态 IP。
+ *
+ * @return ESP_OK 表示启动成功，其他值表示 mDNS 初始化或服务注册失败。
+ */
+esp_err_t start_mdns_service()
+{
+    ESP_RETURN_ON_ERROR(mdns_init(), kTag, "mdns init failed");
+    ESP_RETURN_ON_ERROR(mdns_hostname_set(kMdnsHost), kTag, "mdns hostname failed");
+    ESP_RETURN_ON_ERROR(mdns_instance_name_set(kMdnsName), kTag, "mdns instance failed");
+
+    mdns_txt_item_t txt[] = {
+        {"board", "esp32-s3"},
+        {"app", "clawd-mochi"},
+        {"path", "/"},
+    };
+    ESP_RETURN_ON_ERROR(mdns_service_add(kMdnsName, "_http", "_tcp", 80, txt, sizeof(txt) / sizeof(txt[0])),
+                        kTag, "mdns http service failed");
+    ESP_LOGI(kTag, "mDNS started: %s.local", kMdnsHost);
     return ESP_OK;
 }
 
@@ -1875,6 +1916,7 @@ extern "C" void app_main(void)
 
     anim_logo_reveal();
     ESP_ERROR_CHECK(wifi_init_apsta());
+    ESP_ERROR_CHECK(start_mdns_service());
     ESP_ERROR_CHECK(start_http_server());
     note_activity();
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);

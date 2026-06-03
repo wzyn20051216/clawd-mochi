@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from mochi_bridge import configure_stdio, resolve_host, send_pet
+from mochi_bridge import configure_stdio, send_pet_auto
 
 
 def shorten_text(text: str, limit: int = 18) -> str:
@@ -58,11 +58,10 @@ def main() -> int:
     if not command:
         parser.error("missing command, example: py -3 tools\\mochi_task.py -- idf.py build")
 
-    host = resolve_host(args.host)
     task_name = shorten_text(args.name or Path(command[0]).name)
 
     try:
-        send_pet(host, "thinking", task_name, args.timeout)
+        send_pet_auto(args.host, "thinking", task_name, args.timeout)
     except Exception as exc:  # noqa: BLE001 - 桌宠提示失败不应阻止本地命令执行。
         print(f"桌宠开始提示失败：{exc}", file=sys.stderr)
 
@@ -75,9 +74,9 @@ def main() -> int:
 
     try:
         if result.returncode == 0:
-            send_pet(host, "happy", f"{task_name} OK", args.timeout)
+            send_pet_auto(args.host, "happy", f"{task_name} OK", args.timeout)
         else:
-            send_pet(host, "error", f"{task_name} FAIL", args.timeout)
+            send_pet_auto(args.host, "error", f"{task_name} FAIL", args.timeout)
     except Exception as exc:  # noqa: BLE001
         print(f"桌宠结束提示失败：{exc}", file=sys.stderr)
 

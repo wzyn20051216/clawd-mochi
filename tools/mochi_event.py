@@ -11,7 +11,7 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
-from mochi_bridge import configure_stdio, resolve_host, send_pet
+from mochi_bridge import configure_stdio, send_pet_auto
 
 
 ACTIVE_EVENTS = {
@@ -155,7 +155,7 @@ def main() -> int:
 
     mood, text = map_event(data)
     try:
-        send_pet(resolve_host(args.host), mood, text, args.timeout)
+        send_pet_auto(args.host, mood, text, args.timeout)
     except (TimeoutError, socket.timeout, urllib.error.URLError, OSError):
         pass
 

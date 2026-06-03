@@ -10,5 +10,6 @@ idf_component_register(
         esp_lcd
         esp_timer
         esp_wifi
+        mdns
         nvs_flash
 )
