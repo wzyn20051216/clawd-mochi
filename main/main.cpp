@@ -291,9 +291,6 @@ void save_settings()
         return;
     }
     nvs_set_u32(handle, "bg", g_bg_rgb);
-    nvs_set_u8(handle, "face", static_cast<uint8_t>(g_current_face));
-    nvs_set_u8(handle, "speed", g_anim_speed);
-    nvs_set_u8(handle, "activity", g_idle_activity);
     nvs_set_u8(handle, "bright", g_awake_brightness);
     nvs_commit(handle);
     nvs_close(handle);
@@ -307,23 +304,18 @@ void load_settings()
         return;
     }
     uint32_t bg = kDefaultBgRgb;
-    uint8_t face = kFaceNormal;
-    uint8_t speed = 1;
-    uint8_t activity = 2;
     uint8_t bright = kDefaultBrightness;
     nvs_get_u32(handle, "bg", &bg);
-    nvs_get_u8(handle, "face", &face);
-    nvs_get_u8(handle, "speed", &speed);
-    nvs_get_u8(handle, "activity", &activity);
     nvs_get_u8(handle, "bright", &bright);
     nvs_close(handle);
 
     g_bg_rgb = bg & 0xFFFFFF;
     g_anim_bg = rgb888_to_rgb565(g_bg_rgb);
     g_draw_bg = g_anim_bg;
-    g_current_face = static_cast<Face>(std::clamp<int>(face, kFaceNormal, kFaceLook));
-    g_anim_speed = std::clamp<uint8_t>(speed, 1, 3);
-    g_idle_activity = std::clamp<uint8_t>(activity, 1, 3);
+    g_current_face = kFaceNormal;
+    g_current_view = kViewEyesNormal;
+    g_anim_speed = 2;
+    g_idle_activity = 2;
     g_backlight_brightness = std::clamp<uint8_t>(bright, 5, 100);
     g_awake_brightness = g_backlight_brightness;
 }
@@ -838,6 +830,8 @@ void anim_squish_eyes()
 void anim_wake_up()
 {
     g_busy = true;
+    g_current_face = kFaceNormal;
+    g_current_view = kViewEyesNormal;
     const int full_h = scale_design(kEyeHDesign);
     const int frames[] = {
         std::max(3, scale_design(4)),
@@ -851,7 +845,7 @@ void anim_wake_up()
         draw_waking_eyes(h);
         delay_ms(95);
     }
-    draw_face(g_current_face);
+    draw_face(kFaceNormal);
     g_busy = false;
 }
 
@@ -1512,7 +1506,6 @@ extern "C" void app_main(void)
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);
     draw_wifi_info();
     delay_ms(2200);
-    g_current_view = (g_current_face == kFaceSquish) ? kViewEyesSquish : kViewEyesNormal;
     anim_wake_up();
     xTaskCreate(task_idle_face, "idle_face", 4096, nullptr, 4, nullptr);
 
