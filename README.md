@@ -127,6 +127,12 @@ idf.py set-target esp32s3
 idf.py build
 ```
 
+如果当前终端开着 conda/base，推荐直接用项目自带包装脚本，它会临时加载 ESP-IDF 5.5.2 环境并同步桌宠状态：
+
+```powershell
+tools\idf_mochi.cmd build
+```
+
 如果普通 PowerShell 没加载 ESP-IDF 环境，可先运行：
 
 ```powershell
@@ -199,7 +205,7 @@ py -3 tools\mochi_bridge.py error "build failed"
 也可以让它包住本地命令，自动显示“运行中/成功/失败”：
 
 ```powershell
-py -3 tools\mochi_task.py --name build -- idf.py build
+tools\idf_mochi.cmd build
 py -3 tools\mochi_task.py --name test -- py -3 -m py_compile tools\mochi_bridge.py
 ```
 
