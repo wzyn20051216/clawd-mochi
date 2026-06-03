@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -59,8 +60,9 @@ def main() -> int:
     text = " ".join(args.text).strip()
     try:
         result = send_pet(args.host, args.mood, text, args.timeout)
-    except urllib.error.URLError as exc:
+    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
         print(f"发送失败：{exc}", file=sys.stderr)
+        print("请确认电脑已连接热点 ClaWD-Mochi，并且小屏控制页 http://192.168.4.1 可以打开。", file=sys.stderr)
         return 1
 
     print(json.dumps(result, ensure_ascii=False))
