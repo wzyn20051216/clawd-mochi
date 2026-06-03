@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from mochi_bridge import configure_stdio, send_pet_auto
+from mochi_audio import speak_auto
 from mochi_event import compact_text, map_event, post_tool_failed
 
 
@@ -26,6 +27,16 @@ def send_status(host_arg: str | None, mood: str, text: str, timeout: float) -> N
     """发送状态，失败时不影响 agent 继续运行。"""
     try:
         send_pet_auto(host_arg, mood, text, timeout)
+    except Exception:
+        pass
+
+
+def speak_status(host_arg: str | None, text: str, timeout: float) -> None:
+    """可选语音播报，失败时不影响 agent 主流程。"""
+    if os.environ.get("MOCHI_SPEAK", "").lower() not in {"1", "true", "yes", "on"}:
+        return
+    try:
+        speak_auto(host_arg, text, max(5.0, timeout), os.environ.get("MOCHI_VOICE", ""), 0, 90)
     except Exception:
         pass
 
@@ -102,6 +113,7 @@ def claude_event_to_status(event: dict[str, Any]) -> tuple[str, str] | None:
 def run_stream(command: list[str], mode: str, host_arg: str | None, timeout: float) -> int:
     """运行 agent 命令并消费 JSONL 事件流。"""
     send_status(host_arg, "thinking", mode.title(), timeout)
+    speak_status(host_arg, f"{mode} started", timeout)
     process = subprocess.Popen(
         command_to_text(command),
         stdout=subprocess.PIPE,
@@ -128,8 +140,10 @@ def run_stream(command: list[str], mode: str, host_arg: str | None, timeout: flo
     return_code = process.wait()
     if return_code == 0:
         send_status(host_arg, "happy", f"{mode.title()} OK", timeout)
+        speak_status(host_arg, f"{mode} done", timeout)
     else:
         send_status(host_arg, "error", f"{mode.title()} FAIL", timeout)
+        speak_status(host_arg, f"{mode} failed", timeout)
     return return_code
 
 

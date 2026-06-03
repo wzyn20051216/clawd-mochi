@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import sys
 import urllib.error
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from mochi_bridge import configure_stdio, send_pet_auto
+from mochi_audio import speak_auto
 
 
 ACTIVE_EVENTS = {
@@ -41,6 +43,15 @@ OUTPUT_JSON_EVENTS = {
     "Stop",
     "SubagentStop",
     "StopFailure",
+}
+
+SPEAK_EVENT_TEXT = {
+    "SessionStart": "AI started",
+    "UserPromptSubmit": "Thinking",
+    "PermissionRequest": "Need permission",
+    "Stop": "Ready",
+    "StopFailure": "Task failed",
+    "SessionEnd": "Bye",
 }
 
 
@@ -140,6 +151,20 @@ def hook_stdout(data: dict[str, Any]) -> None:
         print(json.dumps({"continue": True}, separators=(",", ":")))
 
 
+def speak_hook_event(host_arg: str | None, data: dict[str, Any], timeout: float) -> None:
+    """按环境变量启用轻量语音播报，避免默认过于吵闹。"""
+    if os.environ.get("MOCHI_SPEAK", "").lower() not in {"1", "true", "yes", "on"}:
+        return
+    event = str(data.get("hook_event_name") or data.get("event") or "")
+    text = SPEAK_EVENT_TEXT.get(event)
+    if not text:
+        return
+    try:
+        speak_auto(host_arg, text, max(5.0, timeout), os.environ.get("MOCHI_VOICE", ""), 0, 90)
+    except Exception:
+        pass
+
+
 def main() -> int:
     configure_stdio()
 
@@ -158,6 +183,7 @@ def main() -> int:
         send_pet_auto(args.host, mood, text, args.timeout)
     except (TimeoutError, socket.timeout, urllib.error.URLError, OSError):
         pass
+    speak_hook_event(args.host, data, args.timeout)
 
     hook_stdout(data)
     return 0

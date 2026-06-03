@@ -69,6 +69,36 @@ E:\desktop\clawd mochi
 py -3 tools\mochi_audio.py
 ```
 
+电脑端也支持 Windows 本地离线 TTS，把文字合成后推给 ESP32 播放：
+
+```powershell
+py -3 tools\mochi_audio.py --say "Hello, I am Mochi."
+```
+
+列出当前 Windows 可用语音：
+
+```powershell
+py -3 tools\mochi_audio.py --list-voices
+```
+
+指定语音：
+
+```powershell
+py -3 tools\mochi_audio.py --say "Build complete." --voice "Microsoft Zira Desktop"
+```
+
+如果要让 Codex / Claude hook 做轻量语音播报，设置环境变量后重新打开终端：
+
+```powershell
+$env:MOCHI_SPEAK="1"
+```
+
+可选指定语音：
+
+```powershell
+$env:MOCHI_VOICE="Microsoft Zira Desktop"
+```
+
 如果 GPIO 不方便，在 `idf.py menuconfig` 的 `Clawd Mochi -> Audio` 里修改 `BCLK / WS / DOUT`。
 
 ## 屏幕驱动切换
