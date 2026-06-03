@@ -102,6 +102,7 @@ std::string g_sta_ssid;
 std::string g_sta_password;
 bool g_sta_disabled = false;
 uint8_t g_sta_last_disconnect_reason = 0;
+uint8_t g_sta_retry_count = 0;
 std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
@@ -389,6 +390,7 @@ void save_sta_credentials(const std::string &ssid, const std::string &password)
     g_sta_ssid = ssid.substr(0, 32);
     g_sta_password = password.substr(0, 64);
     g_sta_disabled = false;
+    g_sta_retry_count = 0;
     nvs_handle_t handle = 0;
     if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) == ESP_OK) {
         nvs_set_str(handle, "sta_ssid", g_sta_ssid.c_str());
@@ -406,6 +408,7 @@ void clear_sta_credentials()
     g_sta_disabled = true;
     g_sta_connected = false;
     g_sta_ip.addr = 0;
+    g_sta_retry_count = 0;
     nvs_handle_t handle = 0;
     if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) == ESP_OK) {
         nvs_erase_key(handle, "sta_ssid");
@@ -1752,14 +1755,22 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
         g_sta_ip.addr = 0;
         g_sta_last_disconnect_reason = event ? event->reason : 0;
         if (sta_configured()) {
-            ESP_LOGW(kTag, "station disconnected, reason=%u, retrying", g_sta_last_disconnect_reason);
-            esp_wifi_connect();
+            ++g_sta_retry_count;
+            if (g_sta_retry_count >= 3) {
+                ESP_LOGW(kTag, "station disconnected, reason=%u, forget saved WiFi", g_sta_last_disconnect_reason);
+                clear_sta_credentials();
+                draw_pet_notice(kFaceAngry, "WiFi forgotten");
+            } else {
+                ESP_LOGW(kTag, "station disconnected, reason=%u, retrying", g_sta_last_disconnect_reason);
+                esp_wifi_connect();
+            }
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         const auto *event = static_cast<ip_event_got_ip_t *>(event_data);
         g_sta_ip = event->ip_info.ip;
         g_sta_connected = true;
         g_sta_last_disconnect_reason = 0;
+        g_sta_retry_count = 0;
         ESP_LOGI(kTag, "station got ip: " IPSTR, IP2STR(&g_sta_ip));
     }
 }
