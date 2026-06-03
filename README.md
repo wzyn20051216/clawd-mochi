@@ -180,6 +180,29 @@ $env:MOCHI_HOST="192.168.1.23"
 py -3 tools\mochi_bridge.py thinking "coding..."
 ```
 
+更推荐把当前 LAN 地址保存一次：
+
+```powershell
+py -3 tools\mochi_bridge.py --set-host 172.20.10.2
+py -3 tools\mochi_bridge.py --ping
+py -3 tools\mochi_bridge.py --demo
+```
+
+保存后常用状态可以直接发送：
+
+```powershell
+py -3 tools\mochi_bridge.py thinking "coding..."
+py -3 tools\mochi_bridge.py happy "done"
+py -3 tools\mochi_bridge.py error "build failed"
+```
+
+也可以让它包住本地命令，自动显示“运行中/成功/失败”：
+
+```powershell
+py -3 tools\mochi_task.py --name build -- idf.py build
+py -3 tools\mochi_task.py --name test -- py -3 -m py_compile tools\mochi_bridge.py
+```
+
 `mood` 可用：`normal`、`happy`、`thinking`、`error`、`surprise`、`sleepy`、`love`、`wink`、`look`。
 
 当前 LCD 字体仅支持 ASCII，`text` 建议使用短英文或数字。后续接 Claude/Codex 时，推荐由电脑端桥接器保管 API Key，再通过 `/pet` 把状态推送到 ESP32-S3，避免把密钥写进固件。

@@ -8,3 +8,5 @@ dependencies.lock
 *.log
 *.tmp
 *.bak
+__pycache__/
+tools/.mochi_host
