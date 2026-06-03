@@ -9,9 +9,12 @@
 
 #include "esp_check.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_random.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -39,6 +42,8 @@ constexpr int kTermCharH = 20;
 constexpr int kTermPadX = 8;
 constexpr int kTermPadY = 18;
 constexpr int kPrefixPx = 54;
+constexpr uint32_t kDefaultBgRgb = 0xFF8000;
+constexpr const char *kNvsNamespace = "mochi";
 
 enum View : uint8_t {
     kViewEyesNormal = 0,
@@ -63,6 +68,7 @@ uint16_t g_muted = 0;
 uint16_t g_green = 0;
 uint16_t g_anim_bg = 0;
 uint16_t g_draw_bg = 0;
+uint32_t g_bg_rgb = kDefaultBgRgb;
 View g_current_view = kViewEyesNormal;
 Face g_current_face = kFaceNormal;
 bool g_busy = false;
@@ -86,7 +92,7 @@ constexpr char kIndexHtml[] = R"HTML(
 .btn:active,.wide:active{transform:scale(.96)}.btn.active{border-color:#d65728;background:#25150d}.wide{width:100%;max-width:390px}.row{width:100%;max-width:390px;display:flex;gap:10px;align-items:center;color:#8f867d;font-size:12px}
 input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:1px solid #3f3936;border-radius:8px;background:#262529}.canvas{display:none;touch-action:none;background:#ff8000;width:240px;height:240px;border:1px solid #3f3936;image-rendering:pixelated}
 .canvas.on{display:block}.term{display:none;width:100%;max-width:390px;grid-template-columns:1fr auto;gap:8px}.term.on{display:grid}.term input{min-width:0;background:#111318;color:#e8e4dc;border:1px solid #3f3936;border-radius:8px;padding:12px;font:700 16px Courier New,monospace}
-.note{font-size:11px;color:#746b63;text-align:center;max-width:390px;line-height:1.5}
+.note,.status{font-size:11px;color:#746b63;text-align:center;max-width:390px;line-height:1.5}.status{display:none;text-align:left;width:100%;white-space:pre-wrap;background:#111318;border:1px solid #3f3936;border-radius:8px;padding:10px}.status.on{display:block}
 </style></head><body>
 <div class="title">/\\___/\\<br>(  o o  )<br>Clawd Mochi</div>
 <div class="sub">ESP-IDF · ESP32-S3</div>
@@ -105,10 +111,24 @@ input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:
 <div class="row"><span>speed</span><input id="spd" type="range" min="1" max="3" value="1" oninput="speed(this.value)"><span id="sv">slow</span></div>
 <div class="row"><span>light</span><input id="br" type="range" min="5" max="100" value="80" oninput="brightness(this.value)"><span id="bv">80%</span></div>
 <div class="row"><span>bg</span><input class="sw" id="bg" type="color" value="#ff8000" oninput="redraw()"><span>pen</span><input class="sw" id="pen" type="color" value="#000000"></div>
+<div class="row"><span>size</span><input id="psz" type="range" min="1" max="8" value="3"><span id="pv">3</span></div>
 <button id="bl" class="wide" onclick="backlight()">display on</button>
+<div class="grid">
+<button class="btn" onclick="randomFace()">random face</button>
+<button class="btn" onclick="randomColor()">random color</button>
+<button class="btn" onclick="night()">night mode</button>
+<button class="btn" onclick="statusView()">status</button>
+</div>
 <canvas id="cv" class="canvas" width="240" height="240"></canvas>
+<div class="grid">
+<button class="btn" onclick="erase()">eraser</button>
+<button class="btn" onclick="pen()">pen</button>
+<button class="btn" onclick="clearCanvas()">clear</button>
+<button class="btn" onclick="openCanvas()">draw</button>
+</div>
 <div id="term" class="term"><input id="tin" maxlength="1" autocomplete="off"><button class="wide" onclick="sendChar()">send</button></div>
 <button id="done" class="wide" style="display:none" onclick="closeCanvas()">done</button>
+<div id="stat" class="status"></div>
 <div class="note">连接热点 ClaWD-Mochi，密码 clawd1234，打开 192.168.4.1 控制桌面小屏。</div>
 <script>
 let bl=true, drawing=false, pts=[], lcdW=240, lcdH=240; const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
@@ -119,21 +139,32 @@ function cmd(k,v){closeCanvas(false);req('/cmd?k='+k);active(v)}
 function face(v){closeCanvas(false);req('/face?v='+v);active(v===1?1:0)}
 function speed(v){document.getElementById('sv').textContent=labels[v];req('/speed?v='+v)}
 function brightness(v){document.getElementById('bv').textContent=v+'%';bl=true;document.getElementById('bl').textContent='display on';req('/brightness?v='+v)}
+function randomFace(){closeCanvas(false);req('/random?what=face').then(()=>refresh())}
+function randomColor(){closeCanvas(false);req('/random?what=color').then(()=>refresh())}
+function night(){closeCanvas(false);req('/night').then(()=>refresh())}
+function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='driver: '+j.driver+'\\nsize: '+j.w+'x'+j.h+'\\nface: '+j.face+'\\nbg: '+j.bg+'\\nbrightness: '+j.brightness+'%\\nuptime: '+j.uptime+'s\\nfree heap: '+j.heap+' bytes'})}
+function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
-function redraw(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH);req('/redraw?bg='+encodeURIComponent(bg))}
+function paintCanvasOnly(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH)}
+function redraw(){paintCanvasOnly();req('/redraw?bg='+encodeURIComponent(document.getElementById('bg').value))}
 function backlight(){bl=!bl;document.getElementById('bl').textContent=bl?'display on':'display off';req('/backlight?on='+(bl?1:0))}
 function openTerm(){document.getElementById('term').classList.add('on');document.getElementById('tin').focus()}
 function sendChar(){const i=document.getElementById('tin'); if(i.value){req('/char?c='+encodeURIComponent(i.value));i.value='';i.focus()}}
 function openCanvas(){document.getElementById('term').classList.remove('on');cv.classList.add('on');document.getElementById('done').style.display='block';active(3);redraw();req('/canvas?on=1')}
 function closeCanvas(send=true){cv.classList.remove('on');document.getElementById('done').style.display='none';if(send)req('/cmd?k=w')}
+function erase(){document.getElementById('pen').value=document.getElementById('bg').value}
+function pen(){document.getElementById('pen').value='#000000'}
+function clearCanvas(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH);req('/draw/clear?bg='+encodeURIComponent(bg))}
 function pos(e){const r=cv.getBoundingClientRect(),p=e.touches?e.touches[0]:e;return [Math.round((p.clientX-r.left)*lcdW/r.width),Math.round((p.clientY-r.top)*lcdH/r.height)]}
-function flush(){if(pts.length<1)return;req('/draw/stroke?pen='+encodeURIComponent(document.getElementById('pen').value)+'&pts='+encodeURIComponent(pts.map(p=>p[0]+','+p[1]).join(';')));pts=[]}
+function flush(){if(pts.length<1)return;req('/draw/stroke?pen='+encodeURIComponent(document.getElementById('pen').value)+'&size='+document.getElementById('psz').value+'&pts='+encodeURIComponent(pts.map(p=>p[0]+','+p[1]).join(';')));pts=[]}
 function down(e){e.preventDefault();drawing=true;pts=[pos(e)]}
-function move(e){if(!drawing)return;e.preventDefault();const p=pos(e), q=pts[pts.length-1];ctx.strokeStyle=document.getElementById('pen').value;ctx.lineWidth=3;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(q[0],q[1]);ctx.lineTo(p[0],p[1]);ctx.stroke();pts.push(p);if(pts.length>10)flush()}
+function move(e){if(!drawing)return;e.preventDefault();const p=pos(e), q=pts[pts.length-1];ctx.strokeStyle=document.getElementById('pen').value;ctx.lineWidth=document.getElementById('psz').value;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(q[0],q[1]);ctx.lineTo(p[0],p[1]);ctx.stroke();pts.push(p);if(pts.length>10)flush()}
 function up(){drawing=false;flush()}
+document.getElementById('psz').addEventListener('input',e=>document.getElementById('pv').textContent=e.target.value);
 ['mousedown','touchstart'].forEach(e=>cv.addEventListener(e,down,{passive:false}));['mousemove','touchmove'].forEach(e=>cv.addEventListener(e,move,{passive:false}));['mouseup','mouseleave','touchend'].forEach(e=>cv.addEventListener(e,up));
 window.addEventListener('keydown',e=>{if(document.activeElement.id==='tin')return; if(e.key==='w')cmd('w',0); if(e.key==='s')cmd('s',1); if(e.key==='d'){cmd('d',2);openTerm()}});
-fetch('/state').then(r=>r.json()).then(j=>{setCanvasSize(j.w||240,j.h||240);bl=j.bl!==false;document.getElementById('spd').value=j.speed||1;document.getElementById('sv').textContent=labels[j.speed||1];document.getElementById('br').value=j.brightness||80;document.getElementById('bv').textContent=(j.brightness||80)+'%';document.getElementById('bl').textContent=bl?'display on':'display off';active(j.view||0);redraw()}).catch(()=>{redraw()});
+function applyState(j){setCanvasSize(j.w||240,j.h||240);bl=j.bl!==false;document.getElementById('spd').value=j.speed||1;document.getElementById('sv').textContent=labels[j.speed||1];document.getElementById('br').value=j.brightness||80;document.getElementById('bv').textContent=(j.brightness||80)+'%';if(j.bg)document.getElementById('bg').value=j.bg;document.getElementById('bl').textContent=bl?'display on':'display off';active(j.view||0);paintCanvasOnly()}
+fetch('/state').then(r=>r.json()).then(applyState).catch(()=>{paintCanvasOnly()});
 </script></body></html>
 )HTML";
 
@@ -181,6 +212,18 @@ void mark_manual_animation()
     g_manual_anim_until_ms = tick_ms() + 2500;
 }
 
+uint16_t rgb888_to_rgb565(uint32_t rgb)
+{
+    return MochiDisplay::color565((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+}
+
+std::string rgb888_to_hex(uint32_t rgb)
+{
+    char text[8] = {};
+    std::snprintf(text, sizeof(text), "#%06X", static_cast<unsigned>(rgb & 0xFFFFFF));
+    return text;
+}
+
 uint16_t hex_to_rgb565(std::string hex)
 {
     if (!hex.empty() && hex[0] == '#') {
@@ -195,6 +238,63 @@ uint16_t hex_to_rgb565(std::string hex)
         return kWhite;
     }
     return MochiDisplay::color565((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF);
+}
+
+uint32_t hex_to_rgb888(std::string hex, uint32_t fallback = kDefaultBgRgb)
+{
+    if (!hex.empty() && hex[0] == '#') {
+        hex.erase(0, 1);
+    }
+    if (hex.size() != 6) {
+        return fallback;
+    }
+    char *end = nullptr;
+    const long value = std::strtol(hex.c_str(), &end, 16);
+    if (end == hex.c_str()) {
+        return fallback;
+    }
+    return static_cast<uint32_t>(value) & 0xFFFFFF;
+}
+
+void save_settings()
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(kNvsNamespace, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "nvs open for save failed: %s", esp_err_to_name(err));
+        return;
+    }
+    nvs_set_u32(handle, "bg", g_bg_rgb);
+    nvs_set_u8(handle, "face", static_cast<uint8_t>(g_current_face));
+    nvs_set_u8(handle, "speed", g_anim_speed);
+    nvs_set_u8(handle, "bright", g_backlight_brightness);
+    nvs_commit(handle);
+    nvs_close(handle);
+}
+
+void load_settings()
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(kNvsNamespace, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        return;
+    }
+    uint32_t bg = kDefaultBgRgb;
+    uint8_t face = kFaceNormal;
+    uint8_t speed = 1;
+    uint8_t bright = 80;
+    nvs_get_u32(handle, "bg", &bg);
+    nvs_get_u8(handle, "face", &face);
+    nvs_get_u8(handle, "speed", &speed);
+    nvs_get_u8(handle, "bright", &bright);
+    nvs_close(handle);
+
+    g_bg_rgb = bg & 0xFFFFFF;
+    g_anim_bg = rgb888_to_rgb565(g_bg_rgb);
+    g_draw_bg = g_anim_bg;
+    g_current_face = static_cast<Face>(std::clamp<int>(face, kFaceNormal, kFaceAngry));
+    g_anim_speed = std::clamp<uint8_t>(speed, 1, 3);
+    g_backlight_brightness = std::clamp<uint8_t>(bright, 5, 100);
 }
 
 /**
@@ -276,6 +376,13 @@ void set_brightness(uint8_t percent)
     g_backlight_brightness = std::clamp<uint8_t>(percent, 5, 100);
     g_backlight_on = true;
     g_display.setBacklightBrightness(g_backlight_brightness);
+}
+
+void set_background_rgb(uint32_t rgb)
+{
+    g_bg_rgb = rgb & 0xFFFFFF;
+    g_anim_bg = rgb888_to_rgb565(g_bg_rgb);
+    g_draw_bg = g_anim_bg;
 }
 
 int16_t eye_lx(int16_t ox)
@@ -736,6 +843,7 @@ esp_err_t route_speed(httpd_req_t *req)
     const std::string value = query_value(req, "v", 64);
     if (!value.empty()) {
         g_anim_speed = std::clamp(std::atoi(value.c_str()), 1, 3);
+        save_settings();
     }
     send_json(req);
     return ESP_OK;
@@ -750,6 +858,7 @@ esp_err_t route_face(httpd_req_t *req)
         g_current_view = (face == kFaceSquish) ? kViewEyesSquish : kViewEyesNormal;
         g_term_mode = false;
         draw_face(static_cast<Face>(face));
+        save_settings();
     }
     send_json(req);
     return ESP_OK;
@@ -759,8 +868,8 @@ esp_err_t route_redraw(httpd_req_t *req)
 {
     const std::string bg = query_value(req, "bg", 128);
     if (!bg.empty()) {
-        g_anim_bg = hex_to_rgb565(bg);
-        g_draw_bg = g_anim_bg;
+        set_background_rgb(hex_to_rgb888(bg, g_bg_rgb));
+        save_settings();
     }
     switch (g_current_view) {
     case kViewEyesNormal:
@@ -797,12 +906,12 @@ esp_err_t route_canvas(httpd_req_t *req)
 esp_err_t route_draw_clear(httpd_req_t *req)
 {
     const std::string bg = query_value(req, "bg", 128);
-    g_draw_bg = hex_to_rgb565(bg.empty() ? "#ff8000" : bg);
-    g_anim_bg = g_draw_bg;
+    set_background_rgb(hex_to_rgb888(bg.empty() ? "#ff8000" : bg, g_bg_rgb));
     g_current_view = kViewDraw;
     g_term_mode = false;
     g_display.fillScreen(g_draw_bg);
     g_display.flush();
+    save_settings();
     send_json(req);
     return ESP_OK;
 }
@@ -810,6 +919,7 @@ esp_err_t route_draw_clear(httpd_req_t *req)
 esp_err_t route_draw_stroke(httpd_req_t *req)
 {
     const std::string pen = query_value(req, "pen", 128);
+    const std::string size_text = query_value(req, "size", 64);
     const std::string data = query_value(req, "pts", 4096);
     if (pen.empty() || data.empty()) {
         send_json(req);
@@ -817,6 +927,8 @@ esp_err_t route_draw_stroke(httpd_req_t *req)
     }
 
     const uint16_t color = hex_to_rgb565(pen);
+    const int brush = std::clamp(std::atoi(size_text.empty() ? "3" : size_text.c_str()), 1, 8);
+    const int radius = std::max(1, brush / 2);
     g_current_view = kViewDraw;
     int16_t prev_x = -1;
     int16_t prev_y = -1;
@@ -833,19 +945,20 @@ esp_err_t route_draw_stroke(httpd_req_t *req)
             const int16_t x = static_cast<int16_t>(std::atoi(entry.substr(0, comma).c_str()));
             const int16_t y = static_cast<int16_t>(std::atoi(entry.substr(comma + 1).c_str()));
             if (prev_x >= 0) {
-                g_display.drawLine(prev_x, prev_y, x, y, color);
-                g_display.drawLine(prev_x + 1, prev_y, x + 1, y, color);
-                g_display.drawLine(prev_x, prev_y + 1, x, y + 1, color);
-                min_x = std::min<int>(min_x, std::min(prev_x, x) - 3);
-                min_y = std::min<int>(min_y, std::min(prev_y, y) - 3);
-                max_x = std::max<int>(max_x, std::max(prev_x, x) + 4);
-                max_y = std::max<int>(max_y, std::max(prev_y, y) + 4);
+                for (int off = -radius; off <= radius; ++off) {
+                    g_display.drawLine(prev_x + off, prev_y, x + off, y, color);
+                    g_display.drawLine(prev_x, prev_y + off, x, y + off, color);
+                }
+                min_x = std::min<int>(min_x, std::min(prev_x, x) - radius - 2);
+                min_y = std::min<int>(min_y, std::min(prev_y, y) - radius - 2);
+                max_x = std::max<int>(max_x, std::max(prev_x, x) + radius + 3);
+                max_y = std::max<int>(max_y, std::max(prev_y, y) + radius + 3);
             } else {
-                g_display.fillCircle(x, y, 2, color);
-                min_x = std::min<int>(min_x, x - 3);
-                min_y = std::min<int>(min_y, y - 3);
-                max_x = std::max<int>(max_x, x + 4);
-                max_y = std::max<int>(max_y, y + 4);
+                g_display.fillCircle(x, y, radius, color);
+                min_x = std::min<int>(min_x, x - radius - 2);
+                min_y = std::min<int>(min_y, y - radius - 2);
+                max_x = std::max<int>(max_x, x + radius + 3);
+                max_y = std::max<int>(max_y, y + radius + 3);
             }
             prev_x = x;
             prev_y = y;
@@ -874,16 +987,55 @@ esp_err_t route_brightness(httpd_req_t *req)
     const std::string value = query_value(req, "v", 64);
     if (!value.empty()) {
         set_brightness(static_cast<uint8_t>(std::atoi(value.c_str())));
+        save_settings();
     }
+    send_json(req);
+    return ESP_OK;
+}
+
+esp_err_t route_random(httpd_req_t *req)
+{
+    const std::string what = query_value(req, "what", 64);
+    mark_manual_animation();
+    if (what == "face") {
+        const int face = esp_random() % 5;
+        g_current_view = (face == kFaceSquish) ? kViewEyesSquish : kViewEyesNormal;
+        g_term_mode = false;
+        draw_face(static_cast<Face>(face));
+    } else {
+        const uint8_t r = 96 + (esp_random() % 160);
+        const uint8_t g = 80 + (esp_random() % 176);
+        const uint8_t b = esp_random() % 80;
+        set_background_rgb((static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | b);
+        g_current_view = (g_current_face == kFaceSquish) ? kViewEyesSquish : kViewEyesNormal;
+        g_term_mode = false;
+        draw_face(g_current_face);
+    }
+    save_settings();
+    send_json(req);
+    return ESP_OK;
+}
+
+esp_err_t route_night(httpd_req_t *req)
+{
+    mark_manual_animation();
+    set_background_rgb(0x402000);
+    g_anim_speed = 1;
+    set_brightness(18);
+    g_current_face = kFaceSleepy;
+    g_current_view = kViewEyesNormal;
+    g_term_mode = false;
+    draw_face(g_current_face);
+    save_settings();
     send_json(req);
     return ESP_OK;
 }
 
 esp_err_t route_state(httpd_req_t *req)
 {
-    char json[256];
+    char json[384];
     std::snprintf(json, sizeof(json),
-                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"speed\":%u,\"brightness\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"speed\":%u,\"brightness\":%u,\"bg\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
                   static_cast<unsigned>(g_current_view),
                   static_cast<unsigned>(g_current_face),
                   g_busy ? "true" : "false",
@@ -891,6 +1043,9 @@ esp_err_t route_state(httpd_req_t *req)
                   g_backlight_on ? "true" : "false",
                   static_cast<unsigned>(g_anim_speed),
                   static_cast<unsigned>(g_backlight_brightness),
+                  rgb888_to_hex(g_bg_rgb).c_str(),
+                  static_cast<long long>(esp_timer_get_time() / 1000000),
+                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
                   g_display.width(),
                   g_display.height(),
                   g_display.driverName());
@@ -926,6 +1081,8 @@ esp_err_t start_http_server()
     register_uri("/draw/stroke", HTTP_GET, route_draw_stroke);
     register_uri("/backlight", HTTP_GET, route_backlight);
     register_uri("/brightness", HTTP_GET, route_brightness);
+    register_uri("/random", HTTP_GET, route_random);
+    register_uri("/night", HTTP_GET, route_night);
     register_uri("/state", HTTP_GET, route_state);
     return ESP_OK;
 }
@@ -964,8 +1121,7 @@ void init_colours()
     g_dark_bg = MochiDisplay::color565(10, 12, 16);
     g_muted = MochiDisplay::color565(90, 88, 86);
     g_green = MochiDisplay::color565(80, 220, 130);
-    g_anim_bg = g_orange;
-    g_draw_bg = g_orange;
+    set_background_rgb(g_bg_rgb);
 }
 
 void draw_lcd_self_test()
@@ -995,6 +1151,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(nvs_ret);
     ESP_ERROR_CHECK(g_display.init());
     init_colours();
+    load_settings();
     set_brightness(g_backlight_brightness);
     draw_lcd_self_test();
 
@@ -1014,6 +1171,9 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(start_http_server());
     xTaskCreate(task_idle_face, "idle_face", 4096, nullptr, 4, nullptr);
     draw_wifi_info();
+    delay_ms(2200);
+    g_current_view = (g_current_face == kFaceSquish) ? kViewEyesSquish : kViewEyesNormal;
+    draw_face(g_current_face);
 
     while (true) {
         delay_ms(1000);
