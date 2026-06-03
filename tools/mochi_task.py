@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +19,27 @@ def shorten_text(text: str, limit: int = 18) -> str:
     if len(cleaned) <= limit:
         return cleaned
     return cleaned[: limit - 3] + "..."
+
+
+def command_to_shell_text(command: list[str]) -> str:
+    """生成适合当前系统 shell 执行的命令文本。"""
+    if os.name == "nt":
+        return subprocess.list2cmdline(command)
+    return " ".join(subprocess.list2cmdline([part]) for part in command)
+
+
+def run_command(command: list[str]) -> subprocess.CompletedProcess:
+    """通过系统 shell 运行命令，让 Windows 能解析 idf.py、bat、cmd 等入口。"""
+    return subprocess.run(command_to_shell_text(command), shell=True)
+
+
+def print_command_hint(command: list[str]) -> None:
+    """对常见环境问题给出可操作提示。"""
+    exe = Path(command[0]).name.lower()
+    if exe == "idf.py" and shutil.which("idf.py") is None:
+        print("提示：当前终端没有加载 ESP-IDF 环境，所以找不到 idf.py。", file=sys.stderr)
+        print('可以先运行：cd "E:\\Espressif\\frameworks\\esp-idf-v5.5.2"; .\\export.ps1', file=sys.stderr)
+        print('然后回到项目目录：cd "E:\\desktop\\clawd mochi"', file=sys.stderr)
 
 
 def main() -> int:
@@ -43,7 +66,12 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - 桌宠提示失败不应阻止本地命令执行。
         print(f"桌宠开始提示失败：{exc}", file=sys.stderr)
 
-    result = subprocess.run(command, shell=False)
+    try:
+        print_command_hint(command)
+        result = run_command(command)
+    except FileNotFoundError as exc:
+        print(f"命令未找到：{command[0]} ({exc})", file=sys.stderr)
+        result = subprocess.CompletedProcess(command, 127)
 
     try:
         if result.returncode == 0:
