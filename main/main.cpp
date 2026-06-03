@@ -104,6 +104,7 @@ esp_ip4_addr_t g_sta_ip = {};
 std::string g_sta_ssid;
 std::string g_sta_password;
 bool g_sta_disabled = false;
+bool g_sta_manual_pause = false;
 uint8_t g_sta_last_disconnect_reason = 0;
 uint8_t g_sta_retry_count = 0;
 std::string g_term_lines[kTermRows];
@@ -153,7 +154,8 @@ input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:
 <div class="row"><span>WiFi</span><select id="nets"><option value="">点击扫描</option></select><button class="btn" onclick="scanWifi()">扫描</button></div>
 <div class="row"><span>密码</span><input id="wpwd" type="password" placeholder="WiFi password"><button class="btn" onclick="connectWifi()">连接</button></div>
 <div id="wifiMsg" class="status"></div>
-<button class="wide" onclick="forgetWifi()">断开已保存WiFi</button>
+<button class="wide" onclick="forgetWifi()">临时断开WiFi</button>
+<button class="wide" onclick="reconnectWifi()">重连已保存WiFi</button>
 <div class="grid">
 <button class="btn" onclick="randomFace()">随机表情</button>
 <button class="btn" onclick="randomColor()">随机颜色</button>
@@ -195,7 +197,8 @@ function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function scanWifi(){const n=document.getElementById('nets');n.innerHTML='<option>扫描中...</option>';fetch('/wifi/scan',{cache:'no-store'}).then(r=>r.json()).then(j=>{n.innerHTML='';(j.nets||[]).forEach(x=>{const o=document.createElement('option');o.value=x.ssid;o.textContent=x.ssid+' ('+x.rssi+'dBm)';n.appendChild(o)});if(!n.options.length)n.innerHTML='<option value="">没扫到</option>'})}
 function msg(t){const s=document.getElementById('wifiMsg');s.classList.add('on');s.innerHTML=t}
 function connectWifi(){const ssid=document.getElementById('nets').value,pwd=document.getElementById('wpwd').value;if(!ssid){alert('先选择 WiFi');return}msg('正在连接 '+ssid+' ...');fetch('/wifi/connect?ssid='+encodeURIComponent(ssid)+'&pwd='+encodeURIComponent(pwd),{cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.connected){msg('连接成功！<br>切换到目标WiFi后请跳转到：<a style=\"color:#d65728\" href=\"'+j.url+'\">'+j.url+'</a><br>备用 IP：<a style=\"color:#d65728\" href=\"http://'+j.ip+'\">http://'+j.ip+'</a><br>桥接 host：'+j.host)}else{msg('连接失败：'+(j.reason||'未知错误')+'<br>请检查密码或距离路由器远近。')}refresh()}).catch(()=>msg('连接请求失败，请重新打开页面再试。'))}
-function forgetWifi(){if(confirm('断开并清除保存的 WiFi？'))req('/wifi/forget').then(()=>{msg('已断开并清除保存的 WiFi。');refresh()})}
+function forgetWifi(){if(confirm('临时断开当前 WiFi？保存的密码不会删除。'))req('/wifi/forget').then(()=>{msg('已临时断开，保存的 WiFi 没删除。<br>如果当前页面失去连接，请切换到热点 ClaWD-Mochi，打开：<a style=\"color:#d65728\" href=\"http://192.168.4.1\">http://192.168.4.1</a><br>部分设备也可继续用：<a style=\"color:#d65728\" href=\"http://clawd-mochi.local\">http://clawd-mochi.local</a>');refresh()})}
+function reconnectWifi(){msg('正在重连已保存 WiFi ...');fetch('/wifi/connect?saved=1',{cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.connected){msg('重连成功！<br>请跳转到：<a style=\"color:#d65728\" href=\"'+j.url+'\">'+j.url+'</a><br>备用 IP：<a style=\"color:#d65728\" href=\"http://'+j.ip+'\">http://'+j.ip+'</a>')}else{msg('重连失败：'+(j.reason||'没有保存的 WiFi')+'<br>可以连接热点 ClaWD-Mochi 后重新配网，系统也会每 10 秒后台重试。')}refresh()}).catch(()=>msg('重连请求失败，请重新打开页面再试。'))}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
 function paintCanvasOnly(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH)}
 function redraw(){paintCanvasOnly();req('/redraw?bg='+encodeURIComponent(document.getElementById('bg').value))}
@@ -393,30 +396,13 @@ void save_sta_credentials(const std::string &ssid, const std::string &password)
     g_sta_ssid = ssid.substr(0, 32);
     g_sta_password = password.substr(0, 64);
     g_sta_disabled = false;
+    g_sta_manual_pause = false;
     g_sta_retry_count = 0;
     nvs_handle_t handle = 0;
     if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) == ESP_OK) {
         nvs_set_str(handle, "sta_ssid", g_sta_ssid.c_str());
         nvs_set_str(handle, "sta_pwd", g_sta_password.c_str());
         nvs_set_u8(handle, "sta_disabled", 0);
-        nvs_commit(handle);
-        nvs_close(handle);
-    }
-}
-
-void clear_sta_credentials()
-{
-    g_sta_ssid.clear();
-    g_sta_password.clear();
-    g_sta_disabled = true;
-    g_sta_connected = false;
-    g_sta_ip.addr = 0;
-    g_sta_retry_count = 0;
-    nvs_handle_t handle = 0;
-    if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) == ESP_OK) {
-        nvs_erase_key(handle, "sta_ssid");
-        nvs_erase_key(handle, "sta_pwd");
-        nvs_set_u8(handle, "sta_disabled", 1);
         nvs_commit(handle);
         nvs_close(handle);
     }
@@ -1060,9 +1046,14 @@ std::string mdns_host_text()
 
 bool sta_configured()
 {
-    if (g_sta_disabled) {
+    if (g_sta_disabled || g_sta_manual_pause) {
         return false;
     }
+    return !g_sta_ssid.empty() || std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0;
+}
+
+bool sta_credentials_available()
+{
     return !g_sta_ssid.empty() || std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0;
 }
 
@@ -1076,8 +1067,31 @@ std::string sta_password()
     return g_sta_ssid.empty() ? std::string(CONFIG_MOCHI_WIFI_STA_PASSWORD) : g_sta_password;
 }
 
+/**
+ * @brief 将当前保存的 STA 账号密码写入 WiFi 驱动。
+ *
+ * @return ESP_OK 表示配置已写入；没有保存 SSID 时返回 ESP_ERR_INVALID_STATE。
+ */
+esp_err_t apply_sta_wifi_config()
+{
+    if (!sta_credentials_available()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    wifi_config_t sta_config = {};
+    const std::string ssid = sta_ssid();
+    const std::string password = sta_password();
+    std::strncpy(reinterpret_cast<char *>(sta_config.sta.ssid), ssid.c_str(), sizeof(sta_config.sta.ssid));
+    std::strncpy(reinterpret_cast<char *>(sta_config.sta.password), password.c_str(), sizeof(sta_config.sta.password));
+    sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    return esp_wifi_set_config(WIFI_IF_STA, &sta_config);
+}
+
 const char *sta_reason_text(uint8_t reason)
 {
+    if (g_sta_manual_pause) {
+        return "已临时断开";
+    }
     switch (reason) {
     case WIFI_REASON_AUTH_FAIL:
     case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
@@ -1430,22 +1444,24 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
     note_activity();
     const std::string ssid = query_value(req, "ssid", 96);
     const std::string password = query_value(req, "pwd", 128);
-    if (ssid.empty()) {
+    const bool use_saved = query_value(req, "saved", 16) == "1";
+    if (ssid.empty() && (!use_saved || !sta_credentials_available())) {
         httpd_resp_set_status(req, "400 Bad Request");
-        send_json(req, "{\"e\":1}");
+        send_json(req, "{\"e\":1,\"connected\":false,\"reason\":\"没有保存的 WiFi\"}");
         return ESP_OK;
     }
 
-    save_sta_credentials(ssid, password);
+    if (!ssid.empty()) {
+        save_sta_credentials(ssid, password);
+    }
+    g_sta_manual_pause = false;
+    g_sta_disabled = false;
     g_sta_connected = false;
     g_sta_ip.addr = 0;
     g_sta_last_disconnect_reason = 0;
-    wifi_config_t sta_config = {};
-    std::strncpy(reinterpret_cast<char *>(sta_config.sta.ssid), g_sta_ssid.c_str(), sizeof(sta_config.sta.ssid));
-    std::strncpy(reinterpret_cast<char *>(sta_config.sta.password), g_sta_password.c_str(), sizeof(sta_config.sta.password));
-    sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    g_sta_retry_count = 0;
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_disconnect());
-    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(apply_sta_wifi_config());
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
     for (uint8_t i = 0; i < 32 && !g_sta_connected; ++i) {
         delay_ms(250);
@@ -1480,10 +1496,13 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
 esp_err_t route_wifi_forget(httpd_req_t *req)
 {
     note_activity();
-    clear_sta_credentials();
+    g_sta_manual_pause = true;
+    g_sta_connected = false;
+    g_sta_ip.addr = 0;
+    g_sta_retry_count = 0;
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_disconnect());
-    draw_pet_notice(kFaceNormal, "WiFi forgotten");
-    send_json(req);
+    draw_pet_notice(kFaceNormal, "WiFi paused");
+    send_json(req, "{\"ok\":1,\"paused\":true,\"saved\":true,\"ap\":\"http://192.168.4.1\"}");
     return ESP_OK;
 }
 
@@ -1798,9 +1817,8 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
         if (sta_configured()) {
             ++g_sta_retry_count;
             if (g_sta_retry_count >= 3) {
-                ESP_LOGW(kTag, "station disconnected, reason=%u, forget saved WiFi", g_sta_last_disconnect_reason);
-                clear_sta_credentials();
-                draw_pet_notice(kFaceAngry, "WiFi forgotten");
+                ESP_LOGW(kTag, "station disconnected, reason=%u, wait for 10s retry", g_sta_last_disconnect_reason);
+                draw_pet_notice(kFaceAngry, "WiFi retry later");
             } else {
                 ESP_LOGW(kTag, "station disconnected, reason=%u, retrying", g_sta_last_disconnect_reason);
                 esp_wifi_connect();
@@ -1813,6 +1831,24 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
         g_sta_last_disconnect_reason = 0;
         g_sta_retry_count = 0;
         ESP_LOGI(kTag, "station got ip: " IPSTR, IP2STR(&g_sta_ip));
+    }
+}
+
+/**
+ * @brief 后台 WiFi 重连任务。
+ *
+ * STA 连续失败三次后不再紧密重试，避免页面和热点模式被反复打断；
+ * 之后每 10 秒尝试一次，保存的 NVS WiFi 配置不会被清除。
+ */
+void task_wifi_reconnect(void *)
+{
+    while (true) {
+        delay_ms(10000);
+        if (!g_sta_connected && sta_configured() && g_sta_retry_count >= 3) {
+            ESP_LOGI(kTag, "periodic station retry: ssid=%s", sta_ssid().c_str());
+            ESP_ERROR_CHECK_WITHOUT_ABORT(apply_sta_wifi_config());
+            ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
+        }
     }
 }
 
@@ -1843,13 +1879,7 @@ esp_err_t wifi_init_apsta()
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_config), kTag, "ap config failed");
 
     if (sta_configured()) {
-        const std::string ssid = sta_ssid();
-        const std::string password = sta_password();
-        wifi_config_t sta_config = {};
-        std::strncpy(reinterpret_cast<char *>(sta_config.sta.ssid), ssid.c_str(), sizeof(sta_config.sta.ssid));
-        std::strncpy(reinterpret_cast<char *>(sta_config.sta.password), password.c_str(), sizeof(sta_config.sta.password));
-        sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-        ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &sta_config), kTag, "sta config failed");
+        ESP_RETURN_ON_ERROR(apply_sta_wifi_config(), kTag, "sta config failed");
     }
 
     ESP_RETURN_ON_ERROR(esp_wifi_start(), kTag, "wifi start failed");
@@ -1920,6 +1950,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(start_http_server());
     note_activity();
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);
+    xTaskCreate(task_wifi_reconnect, "wifi_retry", 3072, nullptr, 3, nullptr);
     for (uint8_t i = 0; i < 20 && sta_configured() && !g_sta_connected; ++i) {
         delay_ms(250);
     }
