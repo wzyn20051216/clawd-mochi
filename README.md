@@ -123,6 +123,26 @@ E:\desktop\clawd mochi\build\clawd_mochi_s3.bin
 - HTTP 请求处理期间会同步执行动画，动画过程中新的 Web 请求会短暂等待。
 - 未接入物理按键、传感器、音频或 OTA。
 
+## Claude / Codex 桌宠桥接
+
+固件提供轻量桌宠接口：
+
+```text
+GET http://192.168.4.1/pet?mood=happy&text=build%20ok
+```
+
+电脑端可用脚本发送事件：
+
+```powershell
+py -3 tools\mochi_bridge.py happy "build ok"
+py -3 tools\mochi_bridge.py thinking "coding..."
+py -3 tools\mochi_bridge.py error "build failed"
+```
+
+`mood` 可用：`normal`、`happy`、`thinking`、`error`、`surprise`、`sleepy`、`love`、`wink`、`look`。
+
+当前 LCD 字体仅支持 ASCII，`text` 建议使用短英文或数字。后续接 Claude/Codex 时，推荐由电脑端桥接器保管 API Key，再通过 `/pet` 把状态推送到 ESP32-S3，避免把密钥写进固件。
+
 ## 上游来源
 
 原始 Arduino 工程已保留在：

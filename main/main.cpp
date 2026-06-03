@@ -674,6 +674,70 @@ void draw_face(Face face, int16_t ox = 0, bool blink = false)
     }
 }
 
+Face mood_to_face(const std::string &mood)
+{
+    if (mood == "happy" || mood == "done" || mood == "ok") {
+        return kFaceHappy;
+    }
+    if (mood == "angry" || mood == "error" || mood == "fail") {
+        return kFaceAngry;
+    }
+    if (mood == "sleepy" || mood == "idle") {
+        return kFaceSleepy;
+    }
+    if (mood == "surprise" || mood == "warn") {
+        return kFaceSurprise;
+    }
+    if (mood == "love") {
+        return kFaceLove;
+    }
+    if (mood == "thinking" || mood == "look") {
+        return kFaceLook;
+    }
+    if (mood == "wink") {
+        return kFaceWink;
+    }
+    return kFaceNormal;
+}
+
+std::string lcd_ascii_text(const std::string &text, size_t max_len = 24)
+{
+    std::string out;
+    out.reserve(max_len);
+    for (unsigned char ch : text) {
+        if (out.size() >= max_len) {
+            break;
+        }
+        if (ch >= 32 && ch <= 126) {
+            out.push_back(static_cast<char>(ch));
+        } else if (!out.empty() && out.back() != ' ') {
+            out.push_back(' ');
+        }
+    }
+    return out;
+}
+
+void draw_pet_notice(Face face, const std::string &text)
+{
+    g_current_view = kViewEyesNormal;
+    g_term_mode = false;
+    draw_face(face);
+
+    const std::string line = lcd_ascii_text(text.empty() ? "Mochi online" : text);
+    if (!line.empty()) {
+        const int text_size = g_display.width() >= 180 ? 2 : 1;
+        const int strip_h = std::max(24, 14 * text_size);
+        const int y = g_display.height() - strip_h;
+        g_display.fillRect(0, y, g_display.width(), strip_h, g_dark_bg);
+        g_display.drawFastHLine(0, y, g_display.width(), g_orange);
+        g_display.setTextColor(kWhite);
+        g_display.setTextSize(text_size);
+        g_display.setCursor(6, y + 7);
+        g_display.print(line);
+        g_display.flush();
+    }
+}
+
 void draw_code_view()
 {
     g_term_mode = false;
@@ -1156,6 +1220,17 @@ esp_err_t route_face(httpd_req_t *req)
     return ESP_OK;
 }
 
+esp_err_t route_pet(httpd_req_t *req)
+{
+    note_activity();
+    const std::string mood = query_value(req, "mood", 64);
+    const std::string text = query_value(req, "text", 256);
+    mark_manual_animation();
+    draw_pet_notice(mood_to_face(mood), text);
+    send_json(req);
+    return ESP_OK;
+}
+
 esp_err_t route_redraw(httpd_req_t *req)
 {
     note_activity();
@@ -1406,6 +1481,7 @@ esp_err_t start_http_server()
     register_uri("/speed", HTTP_GET, route_speed);
     register_uri("/activity", HTTP_GET, route_activity);
     register_uri("/face", HTTP_GET, route_face);
+    register_uri("/pet", HTTP_GET, route_pet);
     register_uri("/redraw", HTTP_GET, route_redraw);
     register_uri("/canvas", HTTP_GET, route_canvas);
     register_uri("/draw/clear", HTTP_GET, route_draw_clear);
