@@ -74,32 +74,37 @@ ST7789 1.54 inch 240x240
 
 ## 连接正常 WiFi
 
-为了让电脑保持外网，同时还能把 Claude/Codex 状态推送到小屏，建议让 ESP32-S3 连接你的正常 WiFi：
+为了让电脑保持外网，同时还能把 Claude/Codex 状态推送到小屏，建议让 ESP32-S3 连接你的正常 WiFi。
 
-```powershell
-idf.py menuconfig
-```
-
-进入：
+首次配网：
 
 ```text
-Clawd Mochi
+1. 电脑或手机连接热点 ClaWD-Mochi，密码 clawd1234
+2. 打开 http://192.168.4.1
+3. 点击“扫描”
+4. 选择你的正常 WiFi，输入密码，点击“连接”
+5. 等待小屏显示 LAN 地址
 ```
 
-填写：
+连接成功后，WiFi 名和密码会保存到 NVS，掉电不丢。之后上电会自动连接这个 WiFi，同时仍保留 `ClaWD-Mochi` 备用热点。
+
+如果要取消保存的 WiFi，在网页里点击：
 
 ```text
-WiFi station SSID
-WiFi station password
+断开已保存WiFi
 ```
 
-烧录后，小屏会保留 `ClaWD-Mochi` 备用热点，同时尝试连接这个 WiFi。连接成功后屏幕会显示：
+清除后会断开 STA 连接，恢复到只使用备用热点的状态。
+
+连接成功后屏幕会显示：
 
 ```text
 LAN: xxx.xxx.xxx.xxx
 ```
 
 电脑保持连接同一个正常 WiFi，然后用这个 IP 访问控制页或桥接脚本。
+
+高级用法：也可以在 `idf.py menuconfig` 的 `Clawd Mochi` 菜单里预填 `WiFi station SSID` 和 `WiFi station password`，但日常使用推荐网页配网。
 
 如果 ST7735 出现颜色反、方向不对、显示偏移，优先调：
 

@@ -98,6 +98,9 @@ uint32_t g_last_activity_ms = 0;
 bool g_sleeping = false;
 bool g_sta_connected = false;
 esp_ip4_addr_t g_sta_ip = {};
+std::string g_sta_ssid;
+std::string g_sta_password;
+bool g_sta_disabled = false;
 std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
@@ -111,6 +114,7 @@ constexpr char kIndexHtml[] = R"HTML(
 .title{color:#d65728;font-weight:700;letter-spacing:1px;text-align:center;line-height:1.35}.sub{color:#766c64;font-size:11px;letter-spacing:2px}
 .grid{width:100%;max-width:390px;display:grid;grid-template-columns:1fr 1fr;gap:9px}.btn,.wide{border:1px solid #3f3936;background:#262529;color:#eee8df;border-radius:8px;padding:15px 8px;font:700 13px Courier New,monospace}
 .btn:active,.wide:active{transform:scale(.96)}.btn.active{border-color:#d65728;background:#25150d}.wide{width:100%;max-width:390px}.row{width:100%;max-width:390px;display:flex;gap:10px;align-items:center;color:#8f867d;font-size:12px}
+.row input,.row select{min-width:0;background:#111318;color:#eee8df;border:1px solid #3f3936;border-radius:8px;padding:10px;font:700 13px Courier New,monospace}.row select{flex:1}
 input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:1px solid #3f3936;border-radius:8px;background:#262529}.canvas{display:none;touch-action:none;background:#ff8000;width:240px;height:240px;border:1px solid #3f3936;image-rendering:pixelated}
 .canvas.on{display:block}.term{display:none;width:100%;max-width:390px;grid-template-columns:1fr auto;gap:8px}.term.on{display:grid}.term input{min-width:0;background:#111318;color:#e8e4dc;border:1px solid #3f3936;border-radius:8px;padding:12px;font:700 16px Courier New,monospace}
 .note,.status{font-size:11px;color:#746b63;text-align:center;max-width:390px;line-height:1.5}.status{display:none;text-align:left;width:100%;white-space:pre-wrap;background:#111318;border:1px solid #3f3936;border-radius:8px;padding:10px}.status.on{display:block}
@@ -141,6 +145,9 @@ input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:
 <div class="row"><span>背景</span><input class="sw" id="bg" type="color" value="#ff8000" oninput="redraw()"><span>画笔</span><input class="sw" id="pen" type="color" value="#000000"></div>
 <div class="row"><span>粗细</span><input id="psz" type="range" min="1" max="8" value="3"><span id="pv">3</span></div>
 <button id="bl" class="wide" onclick="backlight()">打开屏幕</button>
+<div class="row"><span>WiFi</span><select id="nets"><option value="">点击扫描</option></select><button class="btn" onclick="scanWifi()">扫描</button></div>
+<div class="row"><span>密码</span><input id="wpwd" type="password" placeholder="WiFi password"><button class="btn" onclick="connectWifi()">连接</button></div>
+<button class="wide" onclick="forgetWifi()">断开已保存WiFi</button>
 <div class="grid">
 <button class="btn" onclick="randomFace()">随机表情</button>
 <button class="btn" onclick="randomColor()">随机颜色</button>
@@ -177,8 +184,11 @@ function randomColor(){closeCanvas(false);req('/random?what=color').then(()=>ref
 function night(){closeCanvas(false);req('/night').then(()=>refresh())}
 function day(){closeCanvas(false);req('/day').then(()=>refresh())}
 function factoryReset(){closeCanvas(false);if(confirm('恢复默认设置？'))req('/factory').then(()=>refresh())}
-function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
+function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
 function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
+function scanWifi(){const n=document.getElementById('nets');n.innerHTML='<option>扫描中...</option>';fetch('/wifi/scan',{cache:'no-store'}).then(r=>r.json()).then(j=>{n.innerHTML='';(j.nets||[]).forEach(x=>{const o=document.createElement('option');o.value=x.ssid;o.textContent=x.ssid+' ('+x.rssi+'dBm)';n.appendChild(o)});if(!n.options.length)n.innerHTML='<option value="">没扫到</option>'})}
+function connectWifi(){const ssid=document.getElementById('nets').value,pwd=document.getElementById('wpwd').value;if(!ssid){alert('先选择 WiFi');return}req('/wifi/connect?ssid='+encodeURIComponent(ssid)+'&pwd='+encodeURIComponent(pwd)).then(()=>setTimeout(refresh,1000))}
+function forgetWifi(){if(confirm('断开并清除保存的 WiFi？'))req('/wifi/forget').then(()=>refresh())}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
 function paintCanvasOnly(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH)}
 function redraw(){paintCanvasOnly();req('/redraw?bg='+encodeURIComponent(document.getElementById('bg').value))}
@@ -199,7 +209,7 @@ document.getElementById('psz').addEventListener('input',e=>document.getElementBy
 function pe(e){return e.touches?{clientX:e.touches[0].clientX,clientY:e.touches[0].clientY,pointerId:1,preventDefault:()=>e.preventDefault()}:e}
 if(window.PointerEvent){cv.addEventListener('pointerdown',down,{passive:false});cv.addEventListener('pointermove',move,{passive:false});cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);cv.addEventListener('pointerleave',up)}else{cv.addEventListener('touchstart',e=>down(pe(e)),{passive:false});cv.addEventListener('touchmove',e=>move(pe(e)),{passive:false});cv.addEventListener('touchend',up);cv.addEventListener('mousedown',down,{passive:false});cv.addEventListener('mousemove',move,{passive:false});cv.addEventListener('mouseup',up)}
 window.addEventListener('keydown',e=>{if(document.activeElement.id==='tin')return; if(e.key==='w')cmd('w',0); if(e.key==='s')cmd('s',1); if(e.key==='d'){cmd('d',2);openTerm()}});
-function applyState(j){setCanvasSize(j.w||240,j.h||240);bl=j.bl!==false;document.getElementById('spd').value=j.speed||1;document.getElementById('sv').textContent=labels[j.speed||1];document.getElementById('act').value=j.activity||2;document.getElementById('av').textContent=alabels[j.activity||2];document.getElementById('br').value=j.brightness||80;document.getElementById('bv').textContent=(j.brightness||80)+'%';if(j.bg)document.getElementById('bg').value=j.bg;document.getElementById('bl').textContent=bl?'打开屏幕':'关闭屏幕';active(j.view||0);paintCanvasOnly()}
+function applyState(j){setCanvasSize(j.w||240,j.h||240);bl=j.bl!==false;document.getElementById('spd').value=j.speed||1;document.getElementById('sv').textContent=labels[j.speed||1];document.getElementById('act').value=j.activity||2;document.getElementById('av').textContent=alabels[j.activity||2];document.getElementById('br').value=j.brightness||80;document.getElementById('bv').textContent=(j.brightness||80)+'%';if(j.bg)document.getElementById('bg').value=j.bg;document.getElementById('bl').textContent=bl?'打开屏幕':'关闭屏幕';if(j.sta){const n=document.getElementById('nets');if(!n.value){n.innerHTML='<option value=\"'+j.sta+'\">'+j.sta+'</option>'}}active(j.view||0);paintCanvasOnly()}
 fetch('/state').then(r=>r.json()).then(applyState).catch(()=>{paintCanvasOnly()});
 </script></body></html>
 )HTML";
@@ -302,6 +312,10 @@ void save_settings()
     }
     nvs_set_u32(handle, "bg", g_bg_rgb);
     nvs_set_u8(handle, "bright", g_awake_brightness);
+    if (!g_sta_ssid.empty()) {
+        nvs_set_str(handle, "sta_ssid", g_sta_ssid.c_str());
+        nvs_set_str(handle, "sta_pwd", g_sta_password.c_str());
+    }
     nvs_commit(handle);
     nvs_close(handle);
 }
@@ -315,8 +329,16 @@ void load_settings()
     }
     uint32_t bg = kDefaultBgRgb;
     uint8_t bright = kDefaultBrightness;
+    uint8_t sta_disabled = 0;
+    char sta_ssid[33] = {};
+    char sta_pwd[65] = {};
+    size_t sta_ssid_len = sizeof(sta_ssid);
+    size_t sta_pwd_len = sizeof(sta_pwd);
     nvs_get_u32(handle, "bg", &bg);
     nvs_get_u8(handle, "bright", &bright);
+    nvs_get_u8(handle, "sta_disabled", &sta_disabled);
+    nvs_get_str(handle, "sta_ssid", sta_ssid, &sta_ssid_len);
+    nvs_get_str(handle, "sta_pwd", sta_pwd, &sta_pwd_len);
     nvs_close(handle);
 
     g_bg_rgb = bg & 0xFFFFFF;
@@ -328,6 +350,9 @@ void load_settings()
     g_idle_activity = 2;
     g_backlight_brightness = std::clamp<uint8_t>(bright, 5, 100);
     g_awake_brightness = g_backlight_brightness;
+    g_sta_ssid = sta_ssid;
+    g_sta_password = sta_pwd;
+    g_sta_disabled = sta_disabled != 0;
 }
 
 void set_brightness(uint8_t percent);
@@ -351,6 +376,38 @@ void erase_settings()
     nvs_handle_t handle = 0;
     if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) == ESP_OK) {
         nvs_erase_all(handle);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+}
+
+void save_sta_credentials(const std::string &ssid, const std::string &password)
+{
+    g_sta_ssid = ssid.substr(0, 32);
+    g_sta_password = password.substr(0, 64);
+    g_sta_disabled = false;
+    nvs_handle_t handle = 0;
+    if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_str(handle, "sta_ssid", g_sta_ssid.c_str());
+        nvs_set_str(handle, "sta_pwd", g_sta_password.c_str());
+        nvs_set_u8(handle, "sta_disabled", 0);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+}
+
+void clear_sta_credentials()
+{
+    g_sta_ssid.clear();
+    g_sta_password.clear();
+    g_sta_disabled = true;
+    g_sta_connected = false;
+    g_sta_ip.addr = 0;
+    nvs_handle_t handle = 0;
+    if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_erase_key(handle, "sta_ssid");
+        nvs_erase_key(handle, "sta_pwd");
+        nvs_set_u8(handle, "sta_disabled", 1);
         nvs_commit(handle);
         nvs_close(handle);
     }
@@ -727,6 +784,26 @@ std::string lcd_ascii_text(const std::string &text, size_t max_len = 24)
     return out;
 }
 
+std::string json_escape_ascii(const std::string &text, size_t max_len = 64)
+{
+    std::string out;
+    out.reserve(std::min(text.size(), max_len));
+    for (unsigned char ch : text) {
+        if (out.size() >= max_len) {
+            break;
+        }
+        if (ch == '\\' || ch == '"') {
+            out.push_back('\\');
+            out.push_back(static_cast<char>(ch));
+        } else if (ch >= 32 && ch <= 126) {
+            out.push_back(static_cast<char>(ch));
+        } else if (!out.empty() && out.back() != ' ') {
+            out.push_back(' ');
+        }
+    }
+    return out;
+}
+
 void draw_pet_notice(Face face, const std::string &text)
 {
     g_current_view = kViewEyesNormal;
@@ -960,6 +1037,24 @@ std::string sta_ip_text()
     char ip[16] = {};
     esp_ip4addr_ntoa(&g_sta_ip, ip, sizeof(ip));
     return ip;
+}
+
+bool sta_configured()
+{
+    if (g_sta_disabled) {
+        return false;
+    }
+    return !g_sta_ssid.empty() || std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0;
+}
+
+std::string sta_ssid()
+{
+    return g_sta_ssid.empty() ? std::string(CONFIG_MOCHI_WIFI_STA_SSID) : g_sta_ssid;
+}
+
+std::string sta_password()
+{
+    return g_sta_ssid.empty() ? std::string(CONFIG_MOCHI_WIFI_STA_PASSWORD) : g_sta_password;
 }
 
 void draw_wifi_info()
@@ -1252,6 +1347,72 @@ esp_err_t route_pet(httpd_req_t *req)
     return ESP_OK;
 }
 
+esp_err_t route_wifi_scan(httpd_req_t *req)
+{
+    note_activity();
+    constexpr uint16_t kMaxAps = 12;
+    wifi_ap_record_t aps[kMaxAps] = {};
+    uint16_t count = kMaxAps;
+    esp_err_t err = esp_wifi_scan_start(nullptr, true);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "wifi scan failed: %s", esp_err_to_name(err));
+        send_json(req, "{\"nets\":[]}");
+        return ESP_OK;
+    }
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_scan_get_ap_records(&count, aps));
+    std::string json = "{\"nets\":[";
+    for (uint16_t i = 0; i < count; ++i) {
+        if (i > 0) {
+            json += ",";
+        }
+        json += "{\"ssid\":\"";
+        json += json_escape_ascii(reinterpret_cast<const char *>(aps[i].ssid), 32);
+        json += "\",\"rssi\":";
+        json += std::to_string(aps[i].rssi);
+        json += "}";
+    }
+    json += "]}";
+    send_json(req, json.c_str());
+    return ESP_OK;
+}
+
+esp_err_t route_wifi_connect(httpd_req_t *req)
+{
+    note_activity();
+    const std::string ssid = query_value(req, "ssid", 96);
+    const std::string password = query_value(req, "pwd", 128);
+    if (ssid.empty()) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        send_json(req, "{\"e\":1}");
+        return ESP_OK;
+    }
+
+    save_sta_credentials(ssid, password);
+    wifi_config_t sta_config = {};
+    std::strncpy(reinterpret_cast<char *>(sta_config.sta.ssid), g_sta_ssid.c_str(), sizeof(sta_config.sta.ssid));
+    std::strncpy(reinterpret_cast<char *>(sta_config.sta.password), g_sta_password.c_str(), sizeof(sta_config.sta.password));
+    sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_disconnect());
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
+    for (uint8_t i = 0; i < 20 && !g_sta_connected; ++i) {
+        delay_ms(250);
+    }
+    draw_wifi_info();
+    send_json(req);
+    return ESP_OK;
+}
+
+esp_err_t route_wifi_forget(httpd_req_t *req)
+{
+    note_activity();
+    clear_sta_credentials();
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_disconnect());
+    draw_wifi_info();
+    send_json(req);
+    return ESP_OK;
+}
+
 esp_err_t route_redraw(httpd_req_t *req)
 {
     note_activity();
@@ -1459,7 +1620,7 @@ esp_err_t route_state(httpd_req_t *req)
 {
     char json[448];
     std::snprintf(json, sizeof(json),
-                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
                   static_cast<unsigned>(g_current_view),
                   static_cast<unsigned>(g_current_face),
                   g_busy ? "true" : "false",
@@ -1470,6 +1631,8 @@ esp_err_t route_state(httpd_req_t *req)
                   static_cast<unsigned>(g_idle_activity),
                   static_cast<unsigned>(g_backlight_brightness),
                   rgb888_to_hex(g_bg_rgb).c_str(),
+                  json_escape_ascii(sta_ssid(), 32).c_str(),
+                  sta_ip_text().c_str(),
                   static_cast<long long>(esp_timer_get_time() / 1000000),
                   static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
                   g_display.width(),
@@ -1493,7 +1656,7 @@ esp_err_t start_http_server()
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.stack_size = 8192;
-    config.max_uri_handlers = 20;
+    config.max_uri_handlers = 24;
     config.lru_purge_enable = true;
     ESP_RETURN_ON_ERROR(httpd_start(&g_server, &config), kTag, "http server start failed");
     register_uri("/", HTTP_GET, route_root);
@@ -1503,6 +1666,9 @@ esp_err_t start_http_server()
     register_uri("/activity", HTTP_GET, route_activity);
     register_uri("/face", HTTP_GET, route_face);
     register_uri("/pet", HTTP_GET, route_pet);
+    register_uri("/wifi/scan", HTTP_GET, route_wifi_scan);
+    register_uri("/wifi/connect", HTTP_GET, route_wifi_connect);
+    register_uri("/wifi/forget", HTTP_GET, route_wifi_forget);
     register_uri("/redraw", HTTP_GET, route_redraw);
     register_uri("/canvas", HTTP_GET, route_canvas);
     register_uri("/draw/clear", HTTP_GET, route_draw_clear);
@@ -1520,13 +1686,13 @@ esp_err_t start_http_server()
 void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        if (std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0) {
+        if (sta_configured()) {
             esp_wifi_connect();
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         g_sta_connected = false;
         g_sta_ip.addr = 0;
-        if (std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0) {
+        if (sta_configured()) {
             ESP_LOGW(kTag, "station disconnected, retrying");
             esp_wifi_connect();
         }
@@ -1564,10 +1730,12 @@ esp_err_t wifi_init_apsta()
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), kTag, "wifi mode failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_config), kTag, "ap config failed");
 
-    if (std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0) {
+    if (sta_configured()) {
+        const std::string ssid = sta_ssid();
+        const std::string password = sta_password();
         wifi_config_t sta_config = {};
-        std::strncpy(reinterpret_cast<char *>(sta_config.sta.ssid), CONFIG_MOCHI_WIFI_STA_SSID, sizeof(sta_config.sta.ssid));
-        std::strncpy(reinterpret_cast<char *>(sta_config.sta.password), CONFIG_MOCHI_WIFI_STA_PASSWORD, sizeof(sta_config.sta.password));
+        std::strncpy(reinterpret_cast<char *>(sta_config.sta.ssid), ssid.c_str(), sizeof(sta_config.sta.ssid));
+        std::strncpy(reinterpret_cast<char *>(sta_config.sta.password), password.c_str(), sizeof(sta_config.sta.password));
         sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
         ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &sta_config), kTag, "sta config failed");
     }
@@ -1575,10 +1743,10 @@ esp_err_t wifi_init_apsta()
     ESP_RETURN_ON_ERROR(esp_wifi_start(), kTag, "wifi start failed");
     ESP_LOGI(kTag, "softAP started: ssid=%s password=%s ip=192.168.4.1",
              CONFIG_MOCHI_WIFI_AP_SSID, CONFIG_MOCHI_WIFI_AP_PASSWORD);
-    if (std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0) {
-        ESP_LOGI(kTag, "station connecting: ssid=%s", CONFIG_MOCHI_WIFI_STA_SSID);
+    if (sta_configured()) {
+        ESP_LOGI(kTag, "station connecting: ssid=%s", sta_ssid().c_str());
     } else {
-        ESP_LOGI(kTag, "station disabled; set MOCHI_WIFI_STA_SSID in menuconfig");
+        ESP_LOGI(kTag, "station disabled; configure WiFi from web page");
     }
     return ESP_OK;
 }
@@ -1639,7 +1807,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(start_http_server());
     note_activity();
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);
-    for (uint8_t i = 0; i < 20 && std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0 && !g_sta_connected; ++i) {
+    for (uint8_t i = 0; i < 20 && sta_configured() && !g_sta_connected; ++i) {
         delay_ms(250);
     }
     draw_wifi_info();
