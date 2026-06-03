@@ -258,7 +258,13 @@ C:\Users\23201\.claude\settings.json
 全局 hook 命令必须使用 `mochi_event.py` 的绝对路径，例如：
 
 ```text
-py -3 "E:/desktop/clawd mochi/tools/mochi_event.py"
+py -3 "C:/Users/23201/.codex/mochi-bridge/mochi_event.py"
+```
+
+为避免误删项目后全局桥接失效，建议把全局桥接器固定放在：
+
+```text
+C:\Users\23201\.codex\mochi-bridge
 ```
 
 ## 上游来源
