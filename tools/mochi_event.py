@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import sys
 import urllib.error
@@ -156,13 +157,75 @@ def speak_hook_event(host_arg: str | None, data: dict[str, Any], timeout: float)
     if os.environ.get("MOCHI_SPEAK", "").lower() not in {"1", "true", "yes", "on"}:
         return
     event = str(data.get("hook_event_name") or data.get("event") or "")
-    text = SPEAK_EVENT_TEXT.get(event)
+    text = stop_transcript_reply(data) if event == "Stop" else ""
+    text = text or SPEAK_EVENT_TEXT.get(event)
     if not text:
         return
     try:
         speak_auto(host_arg, text, max(5.0, timeout), os.environ.get("MOCHI_VOICE", ""), 0, 90)
     except Exception:
         pass
+
+
+def clean_spoken_text(text: str) -> str:
+    """清理 transcript 文本，避免把代码块整段读出来。"""
+    limit = int(os.environ.get("MOCHI_SPEAK_MAX_CHARS", "220") or "220")
+    cleaned = re.sub(r"```.*?```", " ", text, flags=re.S)
+    cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
+    cleaned = re.sub(r"https?://\S+", " 链接 ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[: max(40, limit)]
+
+
+def extract_text_fragments(value: Any, depth: int = 0) -> list[str]:
+    """从 transcript JSON 中提取可能的自然语言片段。"""
+    if depth > 7:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            parts.extend(extract_text_fragments(item, depth + 1))
+        return parts
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key, item in value.items():
+            if str(key) in {"text", "content", "message", "result"}:
+                parts.extend(extract_text_fragments(item, depth + 1))
+        return parts
+    return []
+
+
+def stop_transcript_reply(data: dict[str, Any]) -> str:
+    """从 Stop hook 的 transcript 文件里尝试取最后一条 assistant 回复。"""
+    transcript_path = data.get("transcript_path") or data.get("transcript")
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return ""
+    path = Path(transcript_path)
+    if not path.exists() or path.stat().st_size > 2_000_000:
+        return ""
+
+    best = ""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                role = str(item.get("role") or item.get("type") or item.get("speaker") or "").lower()
+                if role and "assistant" not in role:
+                    continue
+                text = " ".join(extract_text_fragments(item))
+                if text:
+                    best = text
+    except OSError:
+        return ""
+    return clean_spoken_text(best)
 
 
 def main() -> int:

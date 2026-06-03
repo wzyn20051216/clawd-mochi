@@ -93,10 +93,18 @@ py -3 tools\mochi_audio.py --say "Build complete." --voice "Microsoft Zira Deskt
 $env:MOCHI_SPEAK="1"
 ```
 
+启用后，`tools\codex_mochi.cmd` 和 `tools\claude_mochi.cmd` 会在任务完成时朗读最终回复。全局 hook 也会在能读取 transcript 的情况下朗读最后一条 assistant 回复，否则只播报简短状态。
+
 可选指定语音：
 
 ```powershell
 $env:MOCHI_VOICE="Microsoft Zira Desktop"
+```
+
+限制每次最多朗读的字符数：
+
+```powershell
+$env:MOCHI_SPEAK_MAX_CHARS="220"
 ```
 
 如果 GPIO 不方便，在 `idf.py menuconfig` 的 `Clawd Mochi -> Audio` 里修改 `BCLK / WS / DOUT`。
