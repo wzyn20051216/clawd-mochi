@@ -44,6 +44,9 @@ constexpr int kTermPadY = 18;
 constexpr int kPrefixPx = 54;
 constexpr uint32_t kDefaultBgRgb = 0xFF8000;
 constexpr const char *kNvsNamespace = "mochi";
+constexpr uint32_t kAutoSleepTimeoutMs = 10 * 60 * 1000;
+constexpr uint8_t kSleepBrightness = 10;
+constexpr uint8_t kDefaultBrightness = 80;
 
 enum View : uint8_t {
     kViewEyesNormal = 0,
@@ -58,6 +61,10 @@ enum Face : uint8_t {
     kFaceHappy = 2,
     kFaceSleepy = 3,
     kFaceAngry = 4,
+    kFaceSurprise = 5,
+    kFaceWink = 6,
+    kFaceLove = 7,
+    kFaceLook = 8,
 };
 
 MochiDisplay g_display;
@@ -75,8 +82,11 @@ bool g_busy = false;
 bool g_backlight_on = true;
 bool g_term_mode = false;
 uint8_t g_anim_speed = 1;
-uint8_t g_backlight_brightness = 80;
+uint8_t g_backlight_brightness = kDefaultBrightness;
+uint8_t g_awake_brightness = kDefaultBrightness;
 uint32_t g_manual_anim_until_ms = 0;
+uint32_t g_last_activity_ms = 0;
+bool g_sleeping = false;
 std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
@@ -108,6 +118,12 @@ input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:
 <button class="btn" onclick="face(4)">生气</button>
 <button class="btn" onclick="face(0)">恢复表情</button>
 </div>
+<div class="grid">
+<button class="btn" onclick="face(5)">惊讶</button>
+<button class="btn" onclick="face(6)">眨单眼</button>
+<button class="btn" onclick="face(7)">爱心眼</button>
+<button class="btn" onclick="face(8)">斜眼</button>
+</div>
 <div class="row"><span>速度</span><input id="spd" type="range" min="1" max="3" value="1" oninput="speed(this.value)"><span id="sv">慢</span></div>
 <div class="row"><span>亮度</span><input id="br" type="range" min="5" max="100" value="80" oninput="brightness(this.value)"><span id="bv">80%</span></div>
 <div class="row"><span>背景</span><input class="sw" id="bg" type="color" value="#ff8000" oninput="redraw()"><span>画笔</span><input class="sw" id="pen" type="color" value="#000000"></div>
@@ -120,6 +136,8 @@ input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:
 <button class="btn" onclick="day()">日间模式</button>
 <button class="btn" onclick="statusView()">状态</button>
 <button class="btn" onclick="openCanvas()">开始画画</button>
+<button class="btn" onclick="factoryReset()">恢复出厂</button>
+<button class="btn" onclick="refresh()">刷新状态</button>
 </div>
 <canvas id="cv" class="canvas" width="240" height="240"></canvas>
 <div class="grid">
@@ -145,7 +163,8 @@ function randomFace(){closeCanvas(false);req('/random?what=face').then(()=>refre
 function randomColor(){closeCanvas(false);req('/random?what=color').then(()=>refresh())}
 function night(){closeCanvas(false);req('/night').then(()=>refresh())}
 function day(){closeCanvas(false);req('/day').then(()=>refresh())}
-function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n亮度: '+j.brightness+'%\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
+function factoryReset(){closeCanvas(false);if(confirm('恢复默认设置？'))req('/factory').then(()=>refresh())}
+function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n亮度: '+j.brightness+'%\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
 function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
 function paintCanvasOnly(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH)}
@@ -271,7 +290,7 @@ void save_settings()
     nvs_set_u32(handle, "bg", g_bg_rgb);
     nvs_set_u8(handle, "face", static_cast<uint8_t>(g_current_face));
     nvs_set_u8(handle, "speed", g_anim_speed);
-    nvs_set_u8(handle, "bright", g_backlight_brightness);
+    nvs_set_u8(handle, "bright", g_awake_brightness);
     nvs_commit(handle);
     nvs_close(handle);
 }
@@ -286,7 +305,7 @@ void load_settings()
     uint32_t bg = kDefaultBgRgb;
     uint8_t face = kFaceNormal;
     uint8_t speed = 1;
-    uint8_t bright = 80;
+    uint8_t bright = kDefaultBrightness;
     nvs_get_u32(handle, "bg", &bg);
     nvs_get_u8(handle, "face", &face);
     nvs_get_u8(handle, "speed", &speed);
@@ -296,9 +315,35 @@ void load_settings()
     g_bg_rgb = bg & 0xFFFFFF;
     g_anim_bg = rgb888_to_rgb565(g_bg_rgb);
     g_draw_bg = g_anim_bg;
-    g_current_face = static_cast<Face>(std::clamp<int>(face, kFaceNormal, kFaceAngry));
+    g_current_face = static_cast<Face>(std::clamp<int>(face, kFaceNormal, kFaceLook));
     g_anim_speed = std::clamp<uint8_t>(speed, 1, 3);
     g_backlight_brightness = std::clamp<uint8_t>(bright, 5, 100);
+    g_awake_brightness = g_backlight_brightness;
+}
+
+void set_brightness(uint8_t percent);
+void set_background_rgb(uint32_t rgb);
+
+void apply_default_settings()
+{
+    set_background_rgb(kDefaultBgRgb);
+    g_current_face = kFaceNormal;
+    g_current_view = kViewEyesNormal;
+    g_anim_speed = 2;
+    g_awake_brightness = kDefaultBrightness;
+    set_brightness(kDefaultBrightness);
+    g_term_mode = false;
+    g_sleeping = false;
+}
+
+void erase_settings()
+{
+    nvs_handle_t handle = 0;
+    if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_erase_all(handle);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
 }
 
 /**
@@ -378,8 +423,20 @@ void set_backlight(bool on)
 void set_brightness(uint8_t percent)
 {
     g_backlight_brightness = std::clamp<uint8_t>(percent, 5, 100);
+    if (!g_sleeping) {
+        g_awake_brightness = g_backlight_brightness;
+    }
     g_backlight_on = true;
     g_display.setBacklightBrightness(g_backlight_brightness);
+}
+
+void note_activity()
+{
+    g_last_activity_ms = tick_ms();
+    if (g_sleeping) {
+        g_sleeping = false;
+        set_brightness(g_awake_brightness);
+    }
 }
 
 void set_background_rgb(uint32_t rgb)
@@ -506,6 +563,55 @@ void draw_angry_eyes()
     g_display.flush();
 }
 
+void draw_surprise_eyes()
+{
+    g_display.fillScreen(g_anim_bg);
+    const int radius = std::max(4, scale_design(15));
+    g_display.fillCircle(eye_lx(0) + scale_design(kEyeWDesign) / 2, eye_cy(), radius, kBlack);
+    g_display.fillCircle(eye_rx(0) + scale_design(kEyeWDesign) / 2, eye_cy(), radius, kBlack);
+    g_display.flush();
+}
+
+void draw_wink_eyes()
+{
+    g_display.fillScreen(g_anim_bg);
+    const int16_t lx = eye_lx(0);
+    const int16_t rx = eye_rx(0);
+    const int16_t ey = eye_y();
+    const int eye_w = scale_design(kEyeWDesign);
+    const int eye_h = scale_design(kEyeHDesign);
+    g_display.fillRect(lx, ey, eye_w, eye_h, kBlack);
+    g_display.fillRect(rx, eye_cy() - scale_design(3), eye_w, std::max(3, scale_design(6)), kBlack);
+    g_display.flush();
+}
+
+void draw_love_eyes()
+{
+    g_display.fillScreen(g_anim_bg);
+    const int size = std::max(5, scale_design(14));
+    auto heart = [&](int cx, int cy) {
+        g_display.fillCircle(cx - size / 2, cy - size / 3, size / 2, kBlack);
+        g_display.fillCircle(cx + size / 2, cy - size / 3, size / 2, kBlack);
+        g_display.fillTriangle(cx - size, cy - size / 4, cx + size, cy - size / 4, cx, cy + size, kBlack);
+    };
+    heart(eye_lx(0) + scale_design(kEyeWDesign) / 2, eye_cy());
+    heart(eye_rx(0) + scale_design(kEyeWDesign) / 2, eye_cy());
+    g_display.flush();
+}
+
+void draw_side_eye()
+{
+    g_display.fillScreen(g_anim_bg);
+    const int16_t lx = eye_lx(-scale_design(8));
+    const int16_t rx = eye_rx(-scale_design(8));
+    const int16_t ey = eye_y() + scale_design(12);
+    const int eye_w = scale_design(kEyeWDesign);
+    const int eye_h = std::max(8, scale_design(18));
+    g_display.fillRect(lx, ey, eye_w + scale_design(10), eye_h, kBlack);
+    g_display.fillRect(rx, ey, eye_w + scale_design(10), eye_h, kBlack);
+    g_display.flush();
+}
+
 void draw_face(Face face, int16_t ox = 0, bool blink = false)
 {
     g_current_face = face;
@@ -521,6 +627,18 @@ void draw_face(Face face, int16_t ox = 0, bool blink = false)
         break;
     case kFaceAngry:
         draw_angry_eyes();
+        break;
+    case kFaceSurprise:
+        draw_surprise_eyes();
+        break;
+    case kFaceWink:
+        draw_wink_eyes();
+        break;
+    case kFaceLove:
+        draw_love_eyes();
+        break;
+    case kFaceLook:
+        draw_side_eye();
         break;
     case kFaceNormal:
     default:
@@ -745,6 +863,22 @@ bool can_idle_animate()
     return static_cast<int32_t>(tick_ms() - g_manual_anim_until_ms) >= 0;
 }
 
+void task_auto_sleep(void *)
+{
+    while (true) {
+        delay_ms(5000);
+        if (g_sleeping || g_current_view == kViewDraw || g_term_mode) {
+            continue;
+        }
+        const uint32_t now = tick_ms();
+        if (static_cast<int32_t>(now - g_last_activity_ms) >= static_cast<int32_t>(kAutoSleepTimeoutMs)) {
+            g_sleeping = true;
+            g_display.setBacklightBrightness(kSleepBrightness);
+            g_backlight_brightness = kSleepBrightness;
+        }
+    }
+}
+
 void task_idle_face(void *)
 {
     uint8_t cycle = 0;
@@ -784,6 +918,7 @@ esp_err_t route_root(httpd_req_t *req)
 
 esp_err_t route_cmd(httpd_req_t *req)
 {
+    note_activity();
     const std::string key = query_value(req, "k", 64);
     if (key.empty()) {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -832,6 +967,7 @@ esp_err_t route_cmd(httpd_req_t *req)
 
 esp_err_t route_char(httpd_req_t *req)
 {
+    note_activity();
     if (g_term_mode) {
         const std::string value = query_value(req, "c", 128);
         if (!value.empty()) {
@@ -844,6 +980,7 @@ esp_err_t route_char(httpd_req_t *req)
 
 esp_err_t route_speed(httpd_req_t *req)
 {
+    note_activity();
     const std::string value = query_value(req, "v", 64);
     if (!value.empty()) {
         g_anim_speed = std::clamp(std::atoi(value.c_str()), 1, 3);
@@ -855,9 +992,10 @@ esp_err_t route_speed(httpd_req_t *req)
 
 esp_err_t route_face(httpd_req_t *req)
 {
+    note_activity();
     const std::string value = query_value(req, "v", 64);
     if (!value.empty()) {
-        const int face = std::clamp(std::atoi(value.c_str()), 0, 4);
+        const int face = std::clamp(std::atoi(value.c_str()), 0, static_cast<int>(kFaceLook));
         mark_manual_animation();
         g_current_view = (face == kFaceSquish) ? kViewEyesSquish : kViewEyesNormal;
         g_term_mode = false;
@@ -870,6 +1008,7 @@ esp_err_t route_face(httpd_req_t *req)
 
 esp_err_t route_redraw(httpd_req_t *req)
 {
+    note_activity();
     const std::string bg = query_value(req, "bg", 128);
     if (!bg.empty()) {
         set_background_rgb(hex_to_rgb888(bg, g_bg_rgb));
@@ -896,6 +1035,7 @@ esp_err_t route_redraw(httpd_req_t *req)
 
 esp_err_t route_canvas(httpd_req_t *req)
 {
+    note_activity();
     const std::string on = query_value(req, "on", 64);
     if (on == "1") {
         g_current_view = kViewDraw;
@@ -909,6 +1049,7 @@ esp_err_t route_canvas(httpd_req_t *req)
 
 esp_err_t route_draw_clear(httpd_req_t *req)
 {
+    note_activity();
     const std::string bg = query_value(req, "bg", 128);
     set_background_rgb(hex_to_rgb888(bg.empty() ? "#ff8000" : bg, g_bg_rgb));
     g_current_view = kViewDraw;
@@ -922,6 +1063,7 @@ esp_err_t route_draw_clear(httpd_req_t *req)
 
 esp_err_t route_draw_stroke(httpd_req_t *req)
 {
+    note_activity();
     const std::string pen = query_value(req, "pen", 128);
     const std::string size_text = query_value(req, "size", 64);
     const std::string data = query_value(req, "pts", 4096);
@@ -981,6 +1123,7 @@ esp_err_t route_draw_stroke(httpd_req_t *req)
 
 esp_err_t route_backlight(httpd_req_t *req)
 {
+    note_activity();
     set_backlight(query_value(req, "on", 64) == "1");
     send_json(req);
     return ESP_OK;
@@ -988,6 +1131,7 @@ esp_err_t route_backlight(httpd_req_t *req)
 
 esp_err_t route_brightness(httpd_req_t *req)
 {
+    note_activity();
     const std::string value = query_value(req, "v", 64);
     if (!value.empty()) {
         set_brightness(static_cast<uint8_t>(std::atoi(value.c_str())));
@@ -999,10 +1143,11 @@ esp_err_t route_brightness(httpd_req_t *req)
 
 esp_err_t route_random(httpd_req_t *req)
 {
+    note_activity();
     const std::string what = query_value(req, "what", 64);
     mark_manual_animation();
     if (what == "face") {
-        const int face = esp_random() % 5;
+        const int face = esp_random() % (static_cast<int>(kFaceLook) + 1);
         g_current_view = (face == kFaceSquish) ? kViewEyesSquish : kViewEyesNormal;
         g_term_mode = false;
         draw_face(static_cast<Face>(face));
@@ -1022,6 +1167,7 @@ esp_err_t route_random(httpd_req_t *req)
 
 esp_err_t route_night(httpd_req_t *req)
 {
+    note_activity();
     mark_manual_animation();
     set_background_rgb(0x402000);
     g_anim_speed = 1;
@@ -1037,6 +1183,7 @@ esp_err_t route_night(httpd_req_t *req)
 
 esp_err_t route_day(httpd_req_t *req)
 {
+    note_activity();
     mark_manual_animation();
     set_background_rgb(kDefaultBgRgb);
     g_anim_speed = 2;
@@ -1050,16 +1197,27 @@ esp_err_t route_day(httpd_req_t *req)
     return ESP_OK;
 }
 
+esp_err_t route_factory(httpd_req_t *req)
+{
+    note_activity();
+    erase_settings();
+    apply_default_settings();
+    draw_face(g_current_face);
+    send_json(req);
+    return ESP_OK;
+}
+
 esp_err_t route_state(httpd_req_t *req)
 {
     char json[384];
     std::snprintf(json, sizeof(json),
-                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"speed\":%u,\"brightness\":%u,\"bg\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"speed\":%u,\"brightness\":%u,\"bg\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
                   static_cast<unsigned>(g_current_view),
                   static_cast<unsigned>(g_current_face),
                   g_busy ? "true" : "false",
                   g_term_mode ? "true" : "false",
                   g_backlight_on ? "true" : "false",
+                  g_sleeping ? "true" : "false",
                   static_cast<unsigned>(g_anim_speed),
                   static_cast<unsigned>(g_backlight_brightness),
                   rgb888_to_hex(g_bg_rgb).c_str(),
@@ -1086,7 +1244,7 @@ esp_err_t start_http_server()
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.stack_size = 8192;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.lru_purge_enable = true;
     ESP_RETURN_ON_ERROR(httpd_start(&g_server, &config), kTag, "http server start failed");
     register_uri("/", HTTP_GET, route_root);
@@ -1103,6 +1261,7 @@ esp_err_t start_http_server()
     register_uri("/random", HTTP_GET, route_random);
     register_uri("/night", HTTP_GET, route_night);
     register_uri("/day", HTTP_GET, route_day);
+    register_uri("/factory", HTTP_GET, route_factory);
     register_uri("/state", HTTP_GET, route_state);
     return ESP_OK;
 }
@@ -1189,6 +1348,8 @@ extern "C" void app_main(void)
     anim_logo_reveal();
     ESP_ERROR_CHECK(wifi_init_softap());
     ESP_ERROR_CHECK(start_http_server());
+    note_activity();
+    xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);
     xTaskCreate(task_idle_face, "idle_face", 4096, nullptr, 4, nullptr);
     draw_wifi_info();
     delay_ms(2200);
