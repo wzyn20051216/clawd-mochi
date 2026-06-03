@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "display.cpp"
+        "main.cpp"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        driver
+        esp_http_server
+        esp_lcd
+        esp_timer
+        esp_wifi
+        nvs_flash
+)

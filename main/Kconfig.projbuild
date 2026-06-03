@@ -1,0 +1,68 @@
+menu "Clawd Mochi"
+
+    choice MOCHI_LCD_DRIVER
+        prompt "LCD driver"
+        default MOCHI_LCD_DRIVER_ST7735
+
+        config MOCHI_LCD_DRIVER_ST7735
+            bool "ST7735 1.8 inch 128x160"
+
+        config MOCHI_LCD_DRIVER_ST7789
+            bool "ST7789 1.54 inch 240x240"
+    endchoice
+
+    config MOCHI_PIN_LCD_MOSI
+        int "LCD MOSI GPIO"
+        default 10
+
+    config MOCHI_PIN_LCD_SCLK
+        int "LCD SCLK GPIO"
+        default 8
+
+    config MOCHI_PIN_LCD_CS
+        int "LCD CS GPIO"
+        default 4
+
+    config MOCHI_PIN_LCD_DC
+        int "LCD DC GPIO"
+        default 1
+
+    config MOCHI_PIN_LCD_RST
+        int "LCD reset GPIO"
+        default 2
+
+    config MOCHI_PIN_LCD_BL
+        int "LCD backlight GPIO"
+        default 3
+
+    config MOCHI_LCD_BACKLIGHT_ACTIVE_HIGH
+        bool "LCD backlight is active high"
+        default y
+
+    config MOCHI_LCD_SPI_CLOCK_HZ
+        int "LCD SPI clock Hz"
+        default 27000000 if MOCHI_LCD_DRIVER_ST7735
+        default 40000000 if MOCHI_LCD_DRIVER_ST7789
+
+    config MOCHI_LCD_MADCTL
+        hex "LCD MADCTL rotation value"
+        default 0xC0 if MOCHI_LCD_DRIVER_ST7735
+        default 0x60 if MOCHI_LCD_DRIVER_ST7789
+
+    config MOCHI_LCD_X_OFFSET
+        int "LCD X offset"
+        default 0
+
+    config MOCHI_LCD_Y_OFFSET
+        int "LCD Y offset"
+        default 0
+
+    config MOCHI_WIFI_AP_SSID
+        string "WiFi AP SSID"
+        default "ClaWD-Mochi"
+
+    config MOCHI_WIFI_AP_PASSWORD
+        string "WiFi AP password"
+        default "clawd1234"
+
+endmenu

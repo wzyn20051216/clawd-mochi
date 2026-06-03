@@ -1,0 +1,132 @@
+# Clawd Mochi ESP32-S3 ESP-IDF 移植版
+
+本工程从开源项目 `yousifamanuel/clawd-mochi` 拉取代码，并将 Arduino `.ino` 版本移植为 ESP-IDF 工程，目标开发板为 ESP32-S3。
+
+当前默认屏幕已切到 **ST7735 1.8 寸 128x160**，后续 1.54 寸 ST7789 240x240 到货后可在 `menuconfig` 中切回。
+
+## 当前功能
+
+- ESP32-S3 SoftAP 热点：`ClaWD-Mochi`，密码：`clawd1234`
+- 浏览器控制页面：`http://192.168.4.1`
+- ST7735 128x160 与 ST7789 240x240 双驱动保留
+- normal eyes / squish eyes / Claude Code / canvas 绘图模式
+- 背光开关、动画速度、背景色、画笔颜色控制
+
+## 工程结构
+
+```text
+E:\desktop\clawd mochi
+├── CMakeLists.txt
+├── sdkconfig.defaults
+├── main
+│   ├── CMakeLists.txt
+│   ├── Kconfig.projbuild
+│   ├── display.cpp
+│   ├── display.hpp
+│   └── main.cpp
+└── upstream
+    └── clawd_mochi.ino
+```
+
+## 默认接线
+
+默认沿用原项目 SPI 接线，但 ESP32-S3 不同开发板的可用排针可能不同，建议先对照你的开发板原理图确认。
+
+| LCD 引脚 | ESP32-S3 GPIO |
+| --- | --- |
+| SDA / MOSI | GPIO10 |
+| SCL / SCLK | GPIO8 |
+| RES / RST | GPIO2 |
+| DC | GPIO1 |
+| CS | GPIO4 |
+| BL | GPIO3 |
+| VCC | 3V3 |
+| GND | GND |
+
+## 屏幕驱动切换
+
+当前默认：
+
+```text
+ST7735 1.8 inch 128x160
+```
+
+如需切到未来的 ST7789 1.54 寸 240x240，执行：
+
+```powershell
+idf.py menuconfig
+```
+
+进入：
+
+```text
+Clawd Mochi
+```
+
+修改 `LCD driver`，可选：
+
+```text
+ST7735 1.8 inch 128x160
+ST7789 1.54 inch 240x240
+```
+
+同一菜单里也可以修改 `LCD MOSI/SCLK/CS/DC/RST/backlight GPIO`、`LCD backlight is active high`、`LCD SPI clock Hz`、`LCD MADCTL rotation value`、`LCD X/Y offset`。
+
+如果 ST7735 出现颜色反、方向不对、显示偏移，优先调：
+
+```text
+LCD backlight is active high
+LCD MADCTL rotation value
+LCD X offset
+LCD Y offset
+```
+
+如果屏幕完全黑屏，先试着取消勾选 `LCD backlight is active high` 重新烧录；如果还是黑，再检查 `BL/LED` 是否需要直接接 3V3。
+
+## 构建
+
+推荐在 ESP-IDF PowerShell 终端中执行：
+
+```powershell
+cd "E:\desktop\clawd mochi"
+idf.py set-target esp32s3
+idf.py build
+```
+
+如果普通 PowerShell 没加载 ESP-IDF 环境，可先运行：
+
+```powershell
+cd "E:\Espressif\frameworks\esp-idf-v5.5.2"
+.\export.ps1
+cd "E:\desktop\clawd mochi"
+idf.py build
+```
+
+## 烧录与监视
+
+把 `COMx` 换成你的串口号：
+
+```powershell
+idf.py -p COMx flash monitor
+```
+
+本次已验证生成固件：
+
+```text
+E:\desktop\clawd mochi\build\clawd_mochi_s3.bin
+```
+
+## 已知限制
+
+- 当前 ESP-IDF 页面是移植后的轻量控制页，不是原 `.ino` 内嵌 HTML 的逐字节复刻。
+- 显示层使用 240x240 RGB565 DMA 帧缓冲，约占 115KB RAM，适合 ESP32-S3。
+- HTTP 请求处理期间会同步执行动画，动画过程中新的 Web 请求会短暂等待。
+- 未接入物理按键、传感器、音频或 OTA。
+
+## 上游来源
+
+原始 Arduino 工程已保留在：
+
+```text
+E:\desktop\clawd mochi\upstream
+```

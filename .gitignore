@@ -1,0 +1,10 @@
+build/
+build_*/
+build*/
+managed_components/
+dependencies.lock
+
+.vscode/ipch/
+*.log
+*.tmp
+*.bak
