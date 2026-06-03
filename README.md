@@ -248,6 +248,19 @@ tools\claude_mochi.cmd "检查当前项目状态，只回复一句话"
 
 Codex / Claude Code 首次加载项目 hook 时可能会要求在 `/hooks` 中确认信任。确认后，正常交互时会自动把 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 等事件同步到 ESP32。
 
+如果希望任意项目都自动同步，可把同样的 hooks 写到用户级配置：
+
+```text
+C:\Users\23201\.codex\hooks.json
+C:\Users\23201\.claude\settings.json
+```
+
+全局 hook 命令必须使用 `mochi_event.py` 的绝对路径，例如：
+
+```text
+py -3 "E:/desktop/clawd mochi/tools/mochi_event.py"
+```
+
 ## 上游来源
 
 原始 Arduino 工程已保留在：
