@@ -47,6 +47,14 @@ enum View : uint8_t {
     kViewDraw = 3,
 };
 
+enum Face : uint8_t {
+    kFaceNormal = 0,
+    kFaceSquish = 1,
+    kFaceHappy = 2,
+    kFaceSleepy = 3,
+    kFaceAngry = 4,
+};
+
 MochiDisplay g_display;
 httpd_handle_t g_server = nullptr;
 uint16_t g_orange = 0;
@@ -56,10 +64,13 @@ uint16_t g_green = 0;
 uint16_t g_anim_bg = 0;
 uint16_t g_draw_bg = 0;
 View g_current_view = kViewEyesNormal;
+Face g_current_face = kFaceNormal;
 bool g_busy = false;
 bool g_backlight_on = true;
 bool g_term_mode = false;
 uint8_t g_anim_speed = 1;
+uint8_t g_backlight_brightness = 80;
+uint32_t g_manual_anim_until_ms = 0;
 std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
@@ -85,7 +96,14 @@ input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:
 <button class="btn" data-v="2" onclick="cmd('d',2);openTerm()">Claude Code</button>
 <button class="btn" data-v="3" onclick="openCanvas()">canvas</button>
 </div>
+<div class="grid">
+<button class="btn" onclick="face(2)">happy</button>
+<button class="btn" onclick="face(3)">sleepy</button>
+<button class="btn" onclick="face(4)">angry</button>
+<button class="btn" onclick="face(0)">reset face</button>
+</div>
 <div class="row"><span>speed</span><input id="spd" type="range" min="1" max="3" value="1" oninput="speed(this.value)"><span id="sv">slow</span></div>
+<div class="row"><span>light</span><input id="br" type="range" min="5" max="100" value="80" oninput="brightness(this.value)"><span id="bv">80%</span></div>
 <div class="row"><span>bg</span><input class="sw" id="bg" type="color" value="#ff8000" oninput="redraw()"><span>pen</span><input class="sw" id="pen" type="color" value="#000000"></div>
 <button id="bl" class="wide" onclick="backlight()">display on</button>
 <canvas id="cv" class="canvas" width="240" height="240"></canvas>
@@ -98,7 +116,9 @@ const labels={1:'slow',2:'normal',3:'fast'};
 function req(u){return fetch(u,{cache:'no-store'}).catch(()=>{});}
 function active(v){document.querySelectorAll('.btn').forEach(b=>b.classList.toggle('active',b.dataset.v==v));}
 function cmd(k,v){closeCanvas(false);req('/cmd?k='+k);active(v)}
+function face(v){closeCanvas(false);req('/face?v='+v);active(v===1?1:0)}
 function speed(v){document.getElementById('sv').textContent=labels[v];req('/speed?v='+v)}
+function brightness(v){document.getElementById('bv').textContent=v+'%';bl=true;document.getElementById('bl').textContent='display on';req('/brightness?v='+v)}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
 function redraw(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH);req('/redraw?bg='+encodeURIComponent(bg))}
 function backlight(){bl=!bl;document.getElementById('bl').textContent=bl?'display on':'display off';req('/backlight?on='+(bl?1:0))}
@@ -113,7 +133,7 @@ function move(e){if(!drawing)return;e.preventDefault();const p=pos(e), q=pts[pts
 function up(){drawing=false;flush()}
 ['mousedown','touchstart'].forEach(e=>cv.addEventListener(e,down,{passive:false}));['mousemove','touchmove'].forEach(e=>cv.addEventListener(e,move,{passive:false}));['mouseup','mouseleave','touchend'].forEach(e=>cv.addEventListener(e,up));
 window.addEventListener('keydown',e=>{if(document.activeElement.id==='tin')return; if(e.key==='w')cmd('w',0); if(e.key==='s')cmd('s',1); if(e.key==='d'){cmd('d',2);openTerm()}});
-fetch('/state').then(r=>r.json()).then(j=>{setCanvasSize(j.w||240,j.h||240);bl=j.bl!==false;document.getElementById('spd').value=j.speed||1;document.getElementById('sv').textContent=labels[j.speed||1];active(j.view||0);redraw()}).catch(()=>{redraw()});
+fetch('/state').then(r=>r.json()).then(j=>{setCanvasSize(j.w||240,j.h||240);bl=j.bl!==false;document.getElementById('spd').value=j.speed||1;document.getElementById('sv').textContent=labels[j.speed||1];document.getElementById('br').value=j.brightness||80;document.getElementById('bv').textContent=(j.brightness||80)+'%';document.getElementById('bl').textContent=bl?'display on':'display off';active(j.view||0);redraw()}).catch(()=>{redraw()});
 </script></body></html>
 )HTML";
 
@@ -149,6 +169,16 @@ int term_cols()
 void delay_ms(int ms)
 {
     vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+uint32_t tick_ms()
+{
+    return static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
+void mark_manual_animation()
+{
+    g_manual_anim_until_ms = tick_ms() + 2500;
 }
 
 uint16_t hex_to_rgb565(std::string hex)
@@ -236,6 +266,18 @@ void set_backlight(bool on)
     g_display.setBacklight(on);
 }
 
+/**
+ * @brief 设置背光亮度并保持开屏状态。
+ *
+ * @param percent 亮度百分比，限制在 5~100，避免误滑到完全看不见。
+ */
+void set_brightness(uint8_t percent)
+{
+    g_backlight_brightness = std::clamp<uint8_t>(percent, 5, 100);
+    g_backlight_on = true;
+    g_display.setBacklightBrightness(g_backlight_brightness);
+}
+
 int16_t eye_lx(int16_t ox)
 {
     const int eye_w = scale_design(kEyeWDesign);
@@ -305,6 +347,75 @@ void draw_squish_eyes(bool closed = false)
         g_display.fillRect(rx, cy - 3, eye_w, 6, kBlack);
     }
     g_display.flush();
+}
+
+void draw_sleepy_eyes()
+{
+    g_display.fillScreen(g_anim_bg);
+    const int16_t lx = eye_lx(0);
+    const int16_t rx = eye_rx(0);
+    const int16_t cy = eye_cy();
+    const int eye_w = scale_design(kEyeWDesign);
+    const int thk = std::max(3, scale_design(7));
+    g_display.fillRect(lx, cy - thk / 2, eye_w, thk, kBlack);
+    g_display.fillRect(rx, cy - thk / 2, eye_w, thk, kBlack);
+    g_display.flush();
+}
+
+void draw_happy_eyes()
+{
+    g_display.fillScreen(g_anim_bg);
+    const int16_t lx = eye_lx(0);
+    const int16_t rx = eye_rx(0);
+    const int16_t cy = eye_cy() + scale_design(4);
+    const int eye_w = scale_design(kEyeWDesign);
+    const int arm = scale_design(18);
+    const int thk = std::max(2, scale_design(4));
+    for (int t = 0; t < thk; ++t) {
+        g_display.drawLine(lx, cy + t, lx + eye_w / 2, cy - arm + t, kBlack);
+        g_display.drawLine(lx + eye_w / 2, cy - arm + t, lx + eye_w, cy + t, kBlack);
+        g_display.drawLine(rx, cy + t, rx + eye_w / 2, cy - arm + t, kBlack);
+        g_display.drawLine(rx + eye_w / 2, cy - arm + t, rx + eye_w, cy + t, kBlack);
+    }
+    g_display.flush();
+}
+
+void draw_angry_eyes()
+{
+    g_display.fillScreen(g_anim_bg);
+    const int16_t lx = eye_lx(0);
+    const int16_t rx = eye_rx(0);
+    const int16_t ey = eye_y() + scale_design(10);
+    const int eye_w = scale_design(kEyeWDesign);
+    const int eye_h = std::max(6, scale_design(14));
+    for (int i = 0; i < eye_h; ++i) {
+        g_display.drawLine(lx, ey + i, lx + eye_w, ey + scale_design(18) + i, kBlack);
+        g_display.drawLine(rx, ey + scale_design(18) + i, rx + eye_w, ey + i, kBlack);
+    }
+    g_display.flush();
+}
+
+void draw_face(Face face, int16_t ox = 0, bool blink = false)
+{
+    g_current_face = face;
+    switch (face) {
+    case kFaceSquish:
+        draw_squish_eyes(blink);
+        break;
+    case kFaceHappy:
+        draw_happy_eyes();
+        break;
+    case kFaceSleepy:
+        draw_sleepy_eyes();
+        break;
+    case kFaceAngry:
+        draw_angry_eyes();
+        break;
+    case kFaceNormal:
+    default:
+        draw_normal_eyes(ox, blink);
+        break;
+    }
 }
 
 void draw_code_view()
@@ -424,6 +535,7 @@ void term_add_char(char c)
 void anim_normal_eyes()
 {
     g_busy = true;
+    mark_manual_animation();
     const int16_t offsets[] = {
         static_cast<int16_t>(-scale_design(16)),
         static_cast<int16_t>(scale_design(16)),
@@ -448,6 +560,7 @@ void anim_normal_eyes()
 void anim_squish_eyes()
 {
     g_busy = true;
+    mark_manual_animation();
     for (uint8_t i = 0; i < 3; ++i) {
         draw_squish_eyes(false);
         delay_ms(speed_ms(160));
@@ -461,6 +574,7 @@ void anim_squish_eyes()
 void anim_logo_reveal()
 {
     g_busy = true;
+    mark_manual_animation();
     g_display.fillScreen(g_anim_bg);
     g_display.setTextColor(kWhite);
     const int final_size = g_display.width() >= 200 ? 4 : 2;
@@ -512,6 +626,43 @@ void draw_wifi_info()
     g_display.flush();
 }
 
+bool can_idle_animate()
+{
+    if (g_busy || g_term_mode || g_current_view == kViewCode || g_current_view == kViewDraw) {
+        return false;
+    }
+    return static_cast<int32_t>(tick_ms() - g_manual_anim_until_ms) >= 0;
+}
+
+void task_idle_face(void *)
+{
+    uint8_t cycle = 0;
+    while (true) {
+        delay_ms(4200);
+        if (!can_idle_animate()) {
+            continue;
+        }
+        g_busy = true;
+        if (g_current_face == kFaceNormal) {
+            if ((cycle % 4) == 3) {
+                draw_normal_eyes(-scale_design(12));
+                delay_ms(180);
+                draw_normal_eyes(scale_design(12));
+                delay_ms(180);
+            }
+            draw_normal_eyes(0, true);
+            delay_ms(90);
+            draw_normal_eyes(0, false);
+        } else if (g_current_face == kFaceSquish) {
+            draw_squish_eyes(true);
+            delay_ms(90);
+            draw_squish_eyes(false);
+        }
+        ++cycle;
+        g_busy = false;
+    }
+}
+
 esp_err_t route_root(httpd_req_t *req)
 {
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
@@ -542,13 +693,16 @@ esp_err_t route_cmd(httpd_req_t *req)
     switch (c) {
     case 'w':
         g_current_view = kViewEyesNormal;
+        g_current_face = kFaceNormal;
         anim_normal_eyes();
         break;
     case 's':
         g_current_view = kViewEyesSquish;
+        g_current_face = kFaceSquish;
         anim_squish_eyes();
         break;
     case 'd':
+        mark_manual_animation();
         g_current_view = kViewCode;
         draw_code_view();
         g_term_mode = true;
@@ -587,6 +741,20 @@ esp_err_t route_speed(httpd_req_t *req)
     return ESP_OK;
 }
 
+esp_err_t route_face(httpd_req_t *req)
+{
+    const std::string value = query_value(req, "v", 64);
+    if (!value.empty()) {
+        const int face = std::clamp(std::atoi(value.c_str()), 0, 4);
+        mark_manual_animation();
+        g_current_view = (face == kFaceSquish) ? kViewEyesSquish : kViewEyesNormal;
+        g_term_mode = false;
+        draw_face(static_cast<Face>(face));
+    }
+    send_json(req);
+    return ESP_OK;
+}
+
 esp_err_t route_redraw(httpd_req_t *req)
 {
     const std::string bg = query_value(req, "bg", 128);
@@ -596,10 +764,10 @@ esp_err_t route_redraw(httpd_req_t *req)
     }
     switch (g_current_view) {
     case kViewEyesNormal:
-        draw_normal_eyes();
+        draw_face(g_current_face);
         break;
     case kViewEyesSquish:
-        draw_squish_eyes();
+        draw_face(kFaceSquish);
         break;
     case kViewCode:
         draw_code_view();
@@ -701,16 +869,28 @@ esp_err_t route_backlight(httpd_req_t *req)
     return ESP_OK;
 }
 
+esp_err_t route_brightness(httpd_req_t *req)
+{
+    const std::string value = query_value(req, "v", 64);
+    if (!value.empty()) {
+        set_brightness(static_cast<uint8_t>(std::atoi(value.c_str())));
+    }
+    send_json(req);
+    return ESP_OK;
+}
+
 esp_err_t route_state(httpd_req_t *req)
 {
-    char json[224];
+    char json[256];
     std::snprintf(json, sizeof(json),
-                  "{\"view\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"speed\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"speed\":%u,\"brightness\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
                   static_cast<unsigned>(g_current_view),
+                  static_cast<unsigned>(g_current_face),
                   g_busy ? "true" : "false",
                   g_term_mode ? "true" : "false",
                   g_backlight_on ? "true" : "false",
                   static_cast<unsigned>(g_anim_speed),
+                  static_cast<unsigned>(g_backlight_brightness),
                   g_display.width(),
                   g_display.height(),
                   g_display.driverName());
@@ -732,18 +912,20 @@ esp_err_t start_http_server()
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.stack_size = 8192;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
     ESP_RETURN_ON_ERROR(httpd_start(&g_server, &config), kTag, "http server start failed");
     register_uri("/", HTTP_GET, route_root);
     register_uri("/cmd", HTTP_GET, route_cmd);
     register_uri("/char", HTTP_GET, route_char);
     register_uri("/speed", HTTP_GET, route_speed);
+    register_uri("/face", HTTP_GET, route_face);
     register_uri("/redraw", HTTP_GET, route_redraw);
     register_uri("/canvas", HTTP_GET, route_canvas);
     register_uri("/draw/clear", HTTP_GET, route_draw_clear);
     register_uri("/draw/stroke", HTTP_GET, route_draw_stroke);
     register_uri("/backlight", HTTP_GET, route_backlight);
+    register_uri("/brightness", HTTP_GET, route_brightness);
     register_uri("/state", HTTP_GET, route_state);
     return ESP_OK;
 }
@@ -813,7 +995,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(nvs_ret);
     ESP_ERROR_CHECK(g_display.init());
     init_colours();
-    set_backlight(true);
+    set_brightness(g_backlight_brightness);
     draw_lcd_self_test();
 
     g_display.fillScreen(g_anim_bg);
@@ -830,6 +1012,7 @@ extern "C" void app_main(void)
     anim_logo_reveal();
     ESP_ERROR_CHECK(wifi_init_softap());
     ESP_ERROR_CHECK(start_http_server());
+    xTaskCreate(task_idle_face, "idle_face", 4096, nullptr, 4, nullptr);
     draw_wifi_info();
 
     while (true) {

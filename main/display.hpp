@@ -45,6 +45,13 @@ public:
     void setBacklight(bool on);
 
     /**
+     * @brief 设置背光亮度。
+     *
+     * @param percent 亮度百分比，范围 0~100。
+     */
+    void setBacklightBrightness(uint8_t percent);
+
+    /**
      * @brief 将当前帧缓冲刷新到屏幕。
      */
     void flush();
@@ -125,6 +132,7 @@ public:
     }
 
 private:
+    void applyBacklightDuty(uint8_t percent);
     void drawPixel(int x, int y, uint16_t color);
     void drawChar(int x, int y, char c, uint16_t color, uint8_t size);
     void setAddressWindow(int x, int y, int w, int h);
@@ -138,4 +146,5 @@ private:
     int cursor_y_ = 0;
     uint16_t text_color_ = 0xFFFF;
     uint8_t text_size_ = 1;
+    uint8_t backlight_percent_ = 100;
 };

@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -22,6 +23,12 @@ namespace {
 
 constexpr const char *kTag = "mochi_display";
 constexpr spi_host_device_t kSpiHost = SPI2_HOST;
+constexpr ledc_mode_t kBacklightLedcMode = LEDC_LOW_SPEED_MODE;
+constexpr ledc_timer_t kBacklightLedcTimer = LEDC_TIMER_0;
+constexpr ledc_channel_t kBacklightLedcChannel = LEDC_CHANNEL_0;
+constexpr ledc_timer_bit_t kBacklightLedcResolution = LEDC_TIMER_10_BIT;
+constexpr uint32_t kBacklightLedcFreqHz = 5000;
+constexpr uint32_t kBacklightLedcMaxDuty = (1UL << 10) - 1;
 
 constexpr uint8_t kCmdSwReset = 0x01;
 constexpr uint8_t kCmdFrameRate1 = 0xB1;
@@ -97,10 +104,23 @@ esp_err_t MochiDisplay::init()
     framebuffer_ = static_cast<uint16_t *>(heap_caps_malloc(width_ * height_ * sizeof(uint16_t), MALLOC_CAP_DMA));
     ESP_RETURN_ON_FALSE(framebuffer_ != nullptr, ESP_ERR_NO_MEM, kTag, "framebuffer alloc failed");
 
-    gpio_config_t bl_cfg = {};
-    bl_cfg.pin_bit_mask = 1ULL << CONFIG_MOCHI_PIN_LCD_BL;
-    bl_cfg.mode = GPIO_MODE_OUTPUT;
-    ESP_RETURN_ON_ERROR(gpio_config(&bl_cfg), kTag, "backlight gpio config failed");
+    ledc_timer_config_t bl_timer = {};
+    bl_timer.speed_mode = kBacklightLedcMode;
+    bl_timer.timer_num = kBacklightLedcTimer;
+    bl_timer.duty_resolution = kBacklightLedcResolution;
+    bl_timer.freq_hz = kBacklightLedcFreqHz;
+    bl_timer.clk_cfg = LEDC_AUTO_CLK;
+    ESP_RETURN_ON_ERROR(ledc_timer_config(&bl_timer), kTag, "backlight ledc timer failed");
+
+    ledc_channel_config_t bl_channel = {};
+    bl_channel.gpio_num = CONFIG_MOCHI_PIN_LCD_BL;
+    bl_channel.speed_mode = kBacklightLedcMode;
+    bl_channel.channel = kBacklightLedcChannel;
+    bl_channel.intr_type = LEDC_INTR_DISABLE;
+    bl_channel.timer_sel = kBacklightLedcTimer;
+    bl_channel.duty = CONFIG_MOCHI_LCD_BACKLIGHT_ACTIVE_HIGH ? 0 : kBacklightLedcMaxDuty;
+    bl_channel.hpoint = 0;
+    ESP_RETURN_ON_ERROR(ledc_channel_config(&bl_channel), kTag, "backlight ledc channel failed");
     setBacklight(true);
 
     spi_bus_config_t buscfg = {};
@@ -190,8 +210,24 @@ esp_err_t MochiDisplay::init()
 
 void MochiDisplay::setBacklight(bool on)
 {
-    const bool level = CONFIG_MOCHI_LCD_BACKLIGHT_ACTIVE_HIGH ? on : !on;
-    gpio_set_level(static_cast<gpio_num_t>(CONFIG_MOCHI_PIN_LCD_BL), level ? 1 : 0);
+    applyBacklightDuty(on ? backlight_percent_ : 0);
+}
+
+void MochiDisplay::setBacklightBrightness(uint8_t percent)
+{
+    backlight_percent_ = std::min<uint8_t>(percent, 100);
+    applyBacklightDuty(backlight_percent_);
+}
+
+void MochiDisplay::applyBacklightDuty(uint8_t percent)
+{
+    percent = std::min<uint8_t>(percent, 100);
+    uint32_t duty = kBacklightLedcMaxDuty * percent / 100;
+    if (!CONFIG_MOCHI_LCD_BACKLIGHT_ACTIVE_HIGH) {
+        duty = kBacklightLedcMaxDuty - duty;
+    }
+    ledc_set_duty(kBacklightLedcMode, kBacklightLedcChannel, duty);
+    ledc_update_duty(kBacklightLedcMode, kBacklightLedcChannel);
 }
 
 const char *MochiDisplay::driverName() const
