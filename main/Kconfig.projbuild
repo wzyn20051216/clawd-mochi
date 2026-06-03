@@ -65,4 +65,12 @@ menu "Clawd Mochi"
         string "WiFi AP password"
         default "clawd1234"
 
+    config MOCHI_WIFI_STA_SSID
+        string "WiFi station SSID"
+        default ""
+
+    config MOCHI_WIFI_STA_PASSWORD
+        string "WiFi station password"
+        default ""
+
 endmenu

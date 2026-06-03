@@ -22,6 +22,14 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#ifndef CONFIG_MOCHI_WIFI_STA_SSID
+#define CONFIG_MOCHI_WIFI_STA_SSID ""
+#endif
+
+#ifndef CONFIG_MOCHI_WIFI_STA_PASSWORD
+#define CONFIG_MOCHI_WIFI_STA_PASSWORD ""
+#endif
+
 namespace {
 
 constexpr const char *kTag = "clawd_mochi";
@@ -88,6 +96,8 @@ uint8_t g_awake_brightness = kDefaultBrightness;
 uint32_t g_manual_anim_until_ms = 0;
 uint32_t g_last_activity_ms = 0;
 bool g_sleeping = false;
+bool g_sta_connected = false;
+esp_ip4_addr_t g_sta_ip = {};
 std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
@@ -942,6 +952,16 @@ void anim_logo_reveal()
     g_busy = false;
 }
 
+std::string sta_ip_text()
+{
+    if (!g_sta_connected) {
+        return "";
+    }
+    char ip[16] = {};
+    esp_ip4addr_ntoa(&g_sta_ip, ip, sizeof(ip));
+    return ip;
+}
+
 void draw_wifi_info()
 {
     g_display.fillScreen(g_dark_bg);
@@ -949,22 +969,23 @@ void draw_wifi_info()
     g_display.setTextColor(kWhite);
     g_display.setTextSize(g_display.width() >= 180 ? 2 : 1);
     g_display.setCursor(12, 16);
-    g_display.print("WiFi: ClaWD-Mochi");
+    g_display.print(g_sta_connected ? "LAN connected" : "WiFi: ClaWD-Mochi");
     g_display.setTextColor(g_muted);
     g_display.setTextSize(1);
     g_display.setCursor(12, 40);
-    g_display.print("password: clawd1234");
+    g_display.print(g_sta_connected ? "same router as PC" : "password: clawd1234");
     g_display.setTextColor(kWhite);
     g_display.setTextSize(g_display.width() >= 180 ? 2 : 1);
     g_display.setCursor(12, 62);
-    g_display.print("Open browser:");
+    g_display.print(g_sta_connected ? "Bridge host:" : "Open browser:");
     g_display.setTextColor(g_orange);
     g_display.setCursor(12, 84);
-    g_display.print("192.168.4.1");
+    const std::string ip = sta_ip_text();
+    g_display.print(g_sta_connected ? ip : "192.168.4.1");
     g_display.setTextColor(g_muted);
     g_display.setTextSize(1);
     g_display.setCursor(12, 112);
-    g_display.print("press web button");
+    g_display.print(g_sta_connected ? "use --host above" : "fallback AP mode");
     g_display.flush();
 }
 
@@ -1496,31 +1517,69 @@ esp_err_t start_http_server()
     return ESP_OK;
 }
 
-esp_err_t wifi_init_softap()
+void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, void *event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        if (std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0) {
+            esp_wifi_connect();
+        }
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        g_sta_connected = false;
+        g_sta_ip.addr = 0;
+        if (std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0) {
+            ESP_LOGW(kTag, "station disconnected, retrying");
+            esp_wifi_connect();
+        }
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        const auto *event = static_cast<ip_event_got_ip_t *>(event_data);
+        g_sta_ip = event->ip_info.ip;
+        g_sta_connected = true;
+        ESP_LOGI(kTag, "station got ip: " IPSTR, IP2STR(&g_sta_ip));
+    }
+}
+
+esp_err_t wifi_init_apsta()
 {
     ESP_RETURN_ON_ERROR(esp_netif_init(), kTag, "netif init failed");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), kTag, "event loop failed");
     esp_netif_create_default_wifi_ap();
+    esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_RETURN_ON_ERROR(esp_wifi_init(&init_config), kTag, "wifi init failed");
+    ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, nullptr), kTag, "wifi event handler failed");
+    ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, nullptr), kTag, "ip event handler failed");
 
-    wifi_config_t wifi_config = {};
-    std::strncpy(reinterpret_cast<char *>(wifi_config.ap.ssid), CONFIG_MOCHI_WIFI_AP_SSID, sizeof(wifi_config.ap.ssid));
-    wifi_config.ap.ssid_len = std::strlen(CONFIG_MOCHI_WIFI_AP_SSID);
-    std::strncpy(reinterpret_cast<char *>(wifi_config.ap.password), CONFIG_MOCHI_WIFI_AP_PASSWORD, sizeof(wifi_config.ap.password));
-    wifi_config.ap.channel = 1;
-    wifi_config.ap.max_connection = 4;
-    wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+    wifi_config_t ap_config = {};
+    std::strncpy(reinterpret_cast<char *>(ap_config.ap.ssid), CONFIG_MOCHI_WIFI_AP_SSID, sizeof(ap_config.ap.ssid));
+    ap_config.ap.ssid_len = std::strlen(CONFIG_MOCHI_WIFI_AP_SSID);
+    std::strncpy(reinterpret_cast<char *>(ap_config.ap.password), CONFIG_MOCHI_WIFI_AP_PASSWORD, sizeof(ap_config.ap.password));
+    ap_config.ap.channel = 1;
+    ap_config.ap.max_connection = 4;
+    ap_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
     if (std::strlen(CONFIG_MOCHI_WIFI_AP_PASSWORD) == 0) {
-        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+        ap_config.ap.authmode = WIFI_AUTH_OPEN;
     }
 
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), kTag, "wifi mode failed");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &wifi_config), kTag, "wifi config failed");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), kTag, "wifi mode failed");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_config), kTag, "ap config failed");
+
+    if (std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0) {
+        wifi_config_t sta_config = {};
+        std::strncpy(reinterpret_cast<char *>(sta_config.sta.ssid), CONFIG_MOCHI_WIFI_STA_SSID, sizeof(sta_config.sta.ssid));
+        std::strncpy(reinterpret_cast<char *>(sta_config.sta.password), CONFIG_MOCHI_WIFI_STA_PASSWORD, sizeof(sta_config.sta.password));
+        sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &sta_config), kTag, "sta config failed");
+    }
+
     ESP_RETURN_ON_ERROR(esp_wifi_start(), kTag, "wifi start failed");
     ESP_LOGI(kTag, "softAP started: ssid=%s password=%s ip=192.168.4.1",
              CONFIG_MOCHI_WIFI_AP_SSID, CONFIG_MOCHI_WIFI_AP_PASSWORD);
+    if (std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0) {
+        ESP_LOGI(kTag, "station connecting: ssid=%s", CONFIG_MOCHI_WIFI_STA_SSID);
+    } else {
+        ESP_LOGI(kTag, "station disabled; set MOCHI_WIFI_STA_SSID in menuconfig");
+    }
     return ESP_OK;
 }
 
@@ -1576,10 +1635,13 @@ extern "C" void app_main(void)
     delay_ms(1200);
 
     anim_logo_reveal();
-    ESP_ERROR_CHECK(wifi_init_softap());
+    ESP_ERROR_CHECK(wifi_init_apsta());
     ESP_ERROR_CHECK(start_http_server());
     note_activity();
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);
+    for (uint8_t i = 0; i < 20 && std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0 && !g_sta_connected; ++i) {
+        delay_ms(250);
+    }
     draw_wifi_info();
     delay_ms(2200);
     anim_wake_up();

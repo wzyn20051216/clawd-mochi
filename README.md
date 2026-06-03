@@ -6,8 +6,8 @@
 
 ## 当前功能
 
-- ESP32-S3 SoftAP 热点：`ClaWD-Mochi`，密码：`clawd1234`
-- 浏览器控制页面：`http://192.168.4.1`
+- ESP32-S3 AP+STA 双模式：保留热点 `ClaWD-Mochi`，也可连接你的正常 WiFi
+- 浏览器控制页面：热点模式 `http://192.168.4.1`，局域网模式使用屏幕显示的 `LAN` 地址
 - ST7735 128x160 与 ST7789 240x240 双驱动保留
 - normal eyes / squish eyes / Claude Code / canvas 绘图模式
 - 背光开关、动画速度、背景色、画笔颜色控制
@@ -72,6 +72,35 @@ ST7789 1.54 inch 240x240
 
 同一菜单里也可以修改 `LCD MOSI/SCLK/CS/DC/RST/backlight GPIO`、`LCD backlight is active high`、`LCD SPI clock Hz`、`LCD MADCTL rotation value`、`LCD X/Y offset`。
 
+## 连接正常 WiFi
+
+为了让电脑保持外网，同时还能把 Claude/Codex 状态推送到小屏，建议让 ESP32-S3 连接你的正常 WiFi：
+
+```powershell
+idf.py menuconfig
+```
+
+进入：
+
+```text
+Clawd Mochi
+```
+
+填写：
+
+```text
+WiFi station SSID
+WiFi station password
+```
+
+烧录后，小屏会保留 `ClaWD-Mochi` 备用热点，同时尝试连接这个 WiFi。连接成功后屏幕会显示：
+
+```text
+LAN: xxx.xxx.xxx.xxx
+```
+
+电脑保持连接同一个正常 WiFi，然后用这个 IP 访问控制页或桥接脚本。
+
 如果 ST7735 出现颜色反、方向不对、显示偏移，优先调：
 
 ```text
@@ -131,12 +160,19 @@ E:\desktop\clawd mochi\build\clawd_mochi_s3.bin
 GET http://192.168.4.1/pet?mood=happy&text=build%20ok
 ```
 
-电脑端可用脚本发送事件：
+如果小屏已经连上正常 WiFi，请把 `--host` 换成屏幕显示的 LAN 地址：
 
 ```powershell
-py -3 tools\mochi_bridge.py happy "build ok"
+py -3 tools\mochi_bridge.py happy "build ok" --host 192.168.1.23
+py -3 tools\mochi_bridge.py thinking "coding..." --host 192.168.1.23
+py -3 tools\mochi_bridge.py error "build failed" --host 192.168.1.23
+```
+
+也可以先设置环境变量，后续省略 `--host`：
+
+```powershell
+$env:MOCHI_HOST="192.168.1.23"
 py -3 tools\mochi_bridge.py thinking "coding..."
-py -3 tools\mochi_bridge.py error "build failed"
 ```
 
 `mood` 可用：`normal`、`happy`、`thinking`、`error`、`surprise`、`sleepy`、`love`、`wink`、`look`。

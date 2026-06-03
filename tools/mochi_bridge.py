@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import sys
 import urllib.error
@@ -53,7 +54,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Send a pet event to Clawd Mochi.")
     parser.add_argument("mood", help="normal/happy/thinking/error/surprise/sleepy/love/wink/look")
     parser.add_argument("text", nargs="*", help="short ASCII text shown on the LCD")
-    parser.add_argument("--host", default="192.168.4.1", help="ESP32 address, default: 192.168.4.1")
+    parser.add_argument("--host", default=os.environ.get("MOCHI_HOST", "192.168.4.1"), help="ESP32 address, default: MOCHI_HOST or 192.168.4.1")
     parser.add_argument("--timeout", type=float, default=3.0, help="HTTP timeout seconds")
     args = parser.parse_args()
 
