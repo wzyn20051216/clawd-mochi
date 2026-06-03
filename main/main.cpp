@@ -97,73 +97,77 @@ input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:
 <div class="title">/\\___/\\<br>(  o o  )<br>Clawd Mochi</div>
 <div class="sub">ESP-IDF · ESP32-S3</div>
 <div class="grid">
-<button class="btn" data-v="0" onclick="cmd('w',0)">normal eyes</button>
-<button class="btn" data-v="1" onclick="cmd('s',1)">squish eyes</button>
+<button class="btn" data-v="0" onclick="cmd('w',0)">普通眼睛</button>
+<button class="btn" data-v="1" onclick="cmd('s',1)">眯眯眼</button>
 <button class="btn" data-v="2" onclick="cmd('d',2);openTerm()">Claude Code</button>
-<button class="btn" data-v="3" onclick="openCanvas()">canvas</button>
+<button class="btn" data-v="3" onclick="openCanvas()">画板</button>
 </div>
 <div class="grid">
-<button class="btn" onclick="face(2)">happy</button>
-<button class="btn" onclick="face(3)">sleepy</button>
-<button class="btn" onclick="face(4)">angry</button>
-<button class="btn" onclick="face(0)">reset face</button>
+<button class="btn" onclick="face(2)">开心</button>
+<button class="btn" onclick="face(3)">困困</button>
+<button class="btn" onclick="face(4)">生气</button>
+<button class="btn" onclick="face(0)">恢复表情</button>
 </div>
-<div class="row"><span>speed</span><input id="spd" type="range" min="1" max="3" value="1" oninput="speed(this.value)"><span id="sv">slow</span></div>
-<div class="row"><span>light</span><input id="br" type="range" min="5" max="100" value="80" oninput="brightness(this.value)"><span id="bv">80%</span></div>
-<div class="row"><span>bg</span><input class="sw" id="bg" type="color" value="#ff8000" oninput="redraw()"><span>pen</span><input class="sw" id="pen" type="color" value="#000000"></div>
-<div class="row"><span>size</span><input id="psz" type="range" min="1" max="8" value="3"><span id="pv">3</span></div>
-<button id="bl" class="wide" onclick="backlight()">display on</button>
+<div class="row"><span>速度</span><input id="spd" type="range" min="1" max="3" value="1" oninput="speed(this.value)"><span id="sv">慢</span></div>
+<div class="row"><span>亮度</span><input id="br" type="range" min="5" max="100" value="80" oninput="brightness(this.value)"><span id="bv">80%</span></div>
+<div class="row"><span>背景</span><input class="sw" id="bg" type="color" value="#ff8000" oninput="redraw()"><span>画笔</span><input class="sw" id="pen" type="color" value="#000000"></div>
+<div class="row"><span>粗细</span><input id="psz" type="range" min="1" max="8" value="3"><span id="pv">3</span></div>
+<button id="bl" class="wide" onclick="backlight()">打开屏幕</button>
 <div class="grid">
-<button class="btn" onclick="randomFace()">random face</button>
-<button class="btn" onclick="randomColor()">random color</button>
-<button class="btn" onclick="night()">night mode</button>
-<button class="btn" onclick="statusView()">status</button>
+<button class="btn" onclick="randomFace()">随机表情</button>
+<button class="btn" onclick="randomColor()">随机颜色</button>
+<button class="btn" onclick="night()">夜间模式</button>
+<button class="btn" onclick="day()">日间模式</button>
+<button class="btn" onclick="statusView()">状态</button>
+<button class="btn" onclick="openCanvas()">开始画画</button>
 </div>
 <canvas id="cv" class="canvas" width="240" height="240"></canvas>
 <div class="grid">
-<button class="btn" onclick="erase()">eraser</button>
-<button class="btn" onclick="pen()">pen</button>
-<button class="btn" onclick="clearCanvas()">clear</button>
-<button class="btn" onclick="openCanvas()">draw</button>
+<button class="btn" onclick="erase()">橡皮擦</button>
+<button class="btn" onclick="pen()">黑色画笔</button>
+<button class="btn" onclick="clearCanvas()">清空画板</button>
+<button class="btn" onclick="openCanvas()">继续画</button>
 </div>
-<div id="term" class="term"><input id="tin" maxlength="1" autocomplete="off"><button class="wide" onclick="sendChar()">send</button></div>
-<button id="done" class="wide" style="display:none" onclick="closeCanvas()">done</button>
+<div id="term" class="term"><input id="tin" maxlength="1" autocomplete="off"><button class="wide" onclick="sendChar()">发送</button></div>
+<button id="done" class="wide" style="display:none" onclick="closeCanvas()">完成</button>
 <div id="stat" class="status"></div>
 <div class="note">连接热点 ClaWD-Mochi，密码 clawd1234，打开 192.168.4.1 控制桌面小屏。</div>
 <script>
 let bl=true, drawing=false, pts=[], lcdW=240, lcdH=240; const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
-const labels={1:'slow',2:'normal',3:'fast'};
+const labels={1:'慢',2:'正常',3:'快'};
 function req(u){return fetch(u,{cache:'no-store'}).catch(()=>{});}
 function active(v){document.querySelectorAll('.btn').forEach(b=>b.classList.toggle('active',b.dataset.v==v));}
 function cmd(k,v){closeCanvas(false);req('/cmd?k='+k);active(v)}
 function face(v){closeCanvas(false);req('/face?v='+v);active(v===1?1:0)}
 function speed(v){document.getElementById('sv').textContent=labels[v];req('/speed?v='+v)}
-function brightness(v){document.getElementById('bv').textContent=v+'%';bl=true;document.getElementById('bl').textContent='display on';req('/brightness?v='+v)}
+function brightness(v){document.getElementById('bv').textContent=v+'%';bl=true;document.getElementById('bl').textContent='打开屏幕';req('/brightness?v='+v)}
 function randomFace(){closeCanvas(false);req('/random?what=face').then(()=>refresh())}
 function randomColor(){closeCanvas(false);req('/random?what=color').then(()=>refresh())}
 function night(){closeCanvas(false);req('/night').then(()=>refresh())}
-function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='driver: '+j.driver+'\\nsize: '+j.w+'x'+j.h+'\\nface: '+j.face+'\\nbg: '+j.bg+'\\nbrightness: '+j.brightness+'%\\nuptime: '+j.uptime+'s\\nfree heap: '+j.heap+' bytes'})}
+function day(){closeCanvas(false);req('/day').then(()=>refresh())}
+function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n亮度: '+j.brightness+'%\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
 function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
 function paintCanvasOnly(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH)}
 function redraw(){paintCanvasOnly();req('/redraw?bg='+encodeURIComponent(document.getElementById('bg').value))}
-function backlight(){bl=!bl;document.getElementById('bl').textContent=bl?'display on':'display off';req('/backlight?on='+(bl?1:0))}
+function backlight(){bl=!bl;document.getElementById('bl').textContent=bl?'打开屏幕':'关闭屏幕';req('/backlight?on='+(bl?1:0))}
 function openTerm(){document.getElementById('term').classList.add('on');document.getElementById('tin').focus()}
 function sendChar(){const i=document.getElementById('tin'); if(i.value){req('/char?c='+encodeURIComponent(i.value));i.value='';i.focus()}}
-function openCanvas(){document.getElementById('term').classList.remove('on');cv.classList.add('on');document.getElementById('done').style.display='block';active(3);redraw();req('/canvas?on=1')}
+function openCanvas(){document.getElementById('term').classList.remove('on');cv.classList.add('on');document.getElementById('done').style.display='block';active(3);clearCanvas();req('/canvas?on=1')}
 function closeCanvas(send=true){cv.classList.remove('on');document.getElementById('done').style.display='none';if(send)req('/cmd?k=w')}
 function erase(){document.getElementById('pen').value=document.getElementById('bg').value}
 function pen(){document.getElementById('pen').value='#000000'}
 function clearCanvas(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH);req('/draw/clear?bg='+encodeURIComponent(bg))}
-function pos(e){const r=cv.getBoundingClientRect(),p=e.touches?e.touches[0]:e;return [Math.round((p.clientX-r.left)*lcdW/r.width),Math.round((p.clientY-r.top)*lcdH/r.height)]}
-function flush(){if(pts.length<1)return;req('/draw/stroke?pen='+encodeURIComponent(document.getElementById('pen').value)+'&size='+document.getElementById('psz').value+'&pts='+encodeURIComponent(pts.map(p=>p[0]+','+p[1]).join(';')));pts=[]}
-function down(e){e.preventDefault();drawing=true;pts=[pos(e)]}
-function move(e){if(!drawing)return;e.preventDefault();const p=pos(e), q=pts[pts.length-1];ctx.strokeStyle=document.getElementById('pen').value;ctx.lineWidth=document.getElementById('psz').value;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(q[0],q[1]);ctx.lineTo(p[0],p[1]);ctx.stroke();pts.push(p);if(pts.length>10)flush()}
-function up(){drawing=false;flush()}
+function pos(e){const r=cv.getBoundingClientRect();return [Math.round((e.clientX-r.left)*lcdW/r.width),Math.round((e.clientY-r.top)*lcdH/r.height)]}
+function flush(keep=false){if(pts.length<1)return;const last=pts[pts.length-1];req('/draw/stroke?pen='+encodeURIComponent(document.getElementById('pen').value)+'&size='+document.getElementById('psz').value+'&pts='+encodeURIComponent(pts.map(p=>p[0]+','+p[1]).join(';')));pts=keep?[last]:[]}
+function down(e){e.preventDefault();cv.setPointerCapture&&cv.setPointerCapture(e.pointerId);drawing=true;pts=[pos(e)];flush(true)}
+function move(e){if(!drawing)return;e.preventDefault();const p=pos(e), q=pts[pts.length-1]||p;ctx.strokeStyle=document.getElementById('pen').value;ctx.lineWidth=document.getElementById('psz').value;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(q[0],q[1]);ctx.lineTo(p[0],p[1]);ctx.stroke();pts.push(p);if(pts.length>6)flush(true)}
+function up(){drawing=false;flush(false)}
 document.getElementById('psz').addEventListener('input',e=>document.getElementById('pv').textContent=e.target.value);
-['mousedown','touchstart'].forEach(e=>cv.addEventListener(e,down,{passive:false}));['mousemove','touchmove'].forEach(e=>cv.addEventListener(e,move,{passive:false}));['mouseup','mouseleave','touchend'].forEach(e=>cv.addEventListener(e,up));
+function pe(e){return e.touches?{clientX:e.touches[0].clientX,clientY:e.touches[0].clientY,pointerId:1,preventDefault:()=>e.preventDefault()}:e}
+if(window.PointerEvent){cv.addEventListener('pointerdown',down,{passive:false});cv.addEventListener('pointermove',move,{passive:false});cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);cv.addEventListener('pointerleave',up)}else{cv.addEventListener('touchstart',e=>down(pe(e)),{passive:false});cv.addEventListener('touchmove',e=>move(pe(e)),{passive:false});cv.addEventListener('touchend',up);cv.addEventListener('mousedown',down,{passive:false});cv.addEventListener('mousemove',move,{passive:false});cv.addEventListener('mouseup',up)}
 window.addEventListener('keydown',e=>{if(document.activeElement.id==='tin')return; if(e.key==='w')cmd('w',0); if(e.key==='s')cmd('s',1); if(e.key==='d'){cmd('d',2);openTerm()}});
-function applyState(j){setCanvasSize(j.w||240,j.h||240);bl=j.bl!==false;document.getElementById('spd').value=j.speed||1;document.getElementById('sv').textContent=labels[j.speed||1];document.getElementById('br').value=j.brightness||80;document.getElementById('bv').textContent=(j.brightness||80)+'%';if(j.bg)document.getElementById('bg').value=j.bg;document.getElementById('bl').textContent=bl?'display on':'display off';active(j.view||0);paintCanvasOnly()}
+function applyState(j){setCanvasSize(j.w||240,j.h||240);bl=j.bl!==false;document.getElementById('spd').value=j.speed||1;document.getElementById('sv').textContent=labels[j.speed||1];document.getElementById('br').value=j.brightness||80;document.getElementById('bv').textContent=(j.brightness||80)+'%';if(j.bg)document.getElementById('bg').value=j.bg;document.getElementById('bl').textContent=bl?'打开屏幕':'关闭屏幕';active(j.view||0);paintCanvasOnly()}
 fetch('/state').then(r=>r.json()).then(applyState).catch(()=>{paintCanvasOnly()});
 </script></body></html>
 )HTML";
@@ -1031,6 +1035,21 @@ esp_err_t route_night(httpd_req_t *req)
     return ESP_OK;
 }
 
+esp_err_t route_day(httpd_req_t *req)
+{
+    mark_manual_animation();
+    set_background_rgb(kDefaultBgRgb);
+    g_anim_speed = 2;
+    set_brightness(80);
+    g_current_face = kFaceNormal;
+    g_current_view = kViewEyesNormal;
+    g_term_mode = false;
+    draw_face(g_current_face);
+    save_settings();
+    send_json(req);
+    return ESP_OK;
+}
+
 esp_err_t route_state(httpd_req_t *req)
 {
     char json[384];
@@ -1083,6 +1102,7 @@ esp_err_t start_http_server()
     register_uri("/brightness", HTTP_GET, route_brightness);
     register_uri("/random", HTTP_GET, route_random);
     register_uri("/night", HTTP_GET, route_night);
+    register_uri("/day", HTTP_GET, route_day);
     register_uri("/state", HTTP_GET, route_state);
     return ESP_OK;
 }
