@@ -43,6 +43,34 @@ E:\desktop\clawd mochi
 | VCC | 3V3 |
 | GND | GND |
 
+## I2S 语音输出
+
+第一阶段已加入 I2S 扬声器输出，推荐使用 `MAX98357A` I2S 数字功放和一个小喇叭。
+
+默认接线：
+
+| MAX98357A 引脚 | ESP32-S3 GPIO |
+| --- | --- |
+| BCLK / BCK | GPIO15 |
+| LRC / WS | GPIO16 |
+| DIN | GPIO17 |
+| VIN | 5V 或 3V3 |
+| GND | GND |
+
+音频格式固定为：
+
+```text
+16000 Hz / 16-bit little-endian / mono PCM
+```
+
+网页里可以点击“测试声音”，也可以用电脑端脚本发送测试音：
+
+```powershell
+py -3 tools\mochi_audio.py
+```
+
+如果 GPIO 不方便，在 `idf.py menuconfig` 的 `Clawd Mochi -> Audio` 里修改 `BCLK / WS / DOUT`。
+
 ## 屏幕驱动切换
 
 当前默认：

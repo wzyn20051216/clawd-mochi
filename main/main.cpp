@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "audio.hpp"
 #include "display.hpp"
 
 #include "esp_check.h"
@@ -36,6 +37,7 @@ namespace {
 constexpr const char *kTag = "clawd_mochi";
 constexpr const char *kMdnsHost = "clawd-mochi";
 constexpr const char *kMdnsName = "Clawd Mochi";
+constexpr size_t kAudioRecvBufferSize = 1024;
 constexpr uint16_t kWhite = 0xFFFF;
 constexpr uint16_t kBlack = 0x0000;
 
@@ -156,6 +158,7 @@ input[type=range]{flex:1;accent-color:#d65728}.sw{width:54px;height:38px;border:
 <div id="wifiMsg" class="status"></div>
 <button class="wide" onclick="forgetWifi()">临时断开WiFi</button>
 <button class="wide" onclick="reconnectWifi()">重连已保存WiFi</button>
+<button class="wide" onclick="audioTest()">测试声音</button>
 <div class="grid">
 <button class="btn" onclick="randomFace()">随机表情</button>
 <button class="btn" onclick="randomColor()">随机颜色</button>
@@ -199,6 +202,7 @@ function msg(t){const s=document.getElementById('wifiMsg');s.classList.add('on')
 function connectWifi(){const ssid=document.getElementById('nets').value,pwd=document.getElementById('wpwd').value;if(!ssid){alert('先选择 WiFi');return}msg('正在连接 '+ssid+' ...');fetch('/wifi/connect?ssid='+encodeURIComponent(ssid)+'&pwd='+encodeURIComponent(pwd),{cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.connected){msg('连接成功！<br>切换到目标WiFi后请跳转到：<a style=\"color:#d65728\" href=\"'+j.url+'\">'+j.url+'</a><br>备用 IP：<a style=\"color:#d65728\" href=\"http://'+j.ip+'\">http://'+j.ip+'</a><br>桥接 host：'+j.host)}else{msg('连接失败：'+(j.reason||'未知错误')+'<br>请检查密码或距离路由器远近。')}refresh()}).catch(()=>msg('连接请求失败，请重新打开页面再试。'))}
 function forgetWifi(){if(confirm('临时断开当前 WiFi？保存的密码不会删除。'))req('/wifi/forget').then(()=>{msg('已临时断开，保存的 WiFi 没删除。<br>如果当前页面失去连接，请切换到热点 ClaWD-Mochi，打开：<a style=\"color:#d65728\" href=\"http://192.168.4.1\">http://192.168.4.1</a><br>部分设备也可继续用：<a style=\"color:#d65728\" href=\"http://clawd-mochi.local\">http://clawd-mochi.local</a>');refresh()})}
 function reconnectWifi(){msg('正在重连已保存 WiFi ...');fetch('/wifi/connect?saved=1',{cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.connected){msg('重连成功！<br>请跳转到：<a style=\"color:#d65728\" href=\"'+j.url+'\">'+j.url+'</a><br>备用 IP：<a style=\"color:#d65728\" href=\"http://'+j.ip+'\">http://'+j.ip+'</a>')}else{msg('重连失败：'+(j.reason||'没有保存的 WiFi')+'<br>可以连接热点 ClaWD-Mochi 后重新配网，系统也会每 10 秒后台重试。')}refresh()}).catch(()=>msg('重连请求失败，请重新打开页面再试。'))}
+function audioTest(){req('/audio/test').then(()=>msg('已发送测试音。'))}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
 function paintCanvasOnly(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH)}
 function redraw(){paintCanvasOnly();req('/redraw?bg='+encodeURIComponent(document.getElementById('bg').value))}
@@ -1506,6 +1510,82 @@ esp_err_t route_wifi_forget(httpd_req_t *req)
     return ESP_OK;
 }
 
+esp_err_t route_audio_test(httpd_req_t *req)
+{
+    note_activity();
+    mark_manual_animation();
+    draw_pet_notice(kFaceHappy, "Audio test");
+    const esp_err_t err = audio_play_test_tone();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "audio test failed: %s", esp_err_to_name(err));
+        send_json(req, "{\"ok\":0,\"audio\":false}");
+        return ESP_OK;
+    }
+    send_json(req, "{\"ok\":1,\"audio\":true}");
+    return ESP_OK;
+}
+
+esp_err_t route_audio_pcm(httpd_req_t *req)
+{
+    note_activity();
+    if (!audio_is_ready()) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        send_json(req, "{\"ok\":0,\"reason\":\"audio disabled\"}");
+        return ESP_OK;
+    }
+
+    mark_manual_animation();
+    draw_pet_notice(kFaceHappy, "Speaking");
+    std::vector<uint8_t> buffer(kAudioRecvBufferSize + 1);
+    bool has_pending_byte = false;
+    uint8_t pending_byte = 0;
+    size_t remaining = req->content_len;
+    while (remaining > 0) {
+        const int recv_len = httpd_req_recv(req, reinterpret_cast<char *>(buffer.data()),
+                                           std::min<size_t>(remaining, kAudioRecvBufferSize));
+        if (recv_len <= 0) {
+            if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            httpd_resp_set_status(req, "400 Bad Request");
+            send_json(req, "{\"ok\":0,\"reason\":\"recv failed\"}");
+            return ESP_OK;
+        }
+        size_t play_len = static_cast<size_t>(recv_len);
+        if (has_pending_byte) {
+            for (size_t i = play_len; i > 0; --i) {
+                buffer[i] = buffer[i - 1];
+            }
+            buffer[0] = pending_byte;
+            ++play_len;
+            has_pending_byte = false;
+        }
+        if ((play_len % sizeof(int16_t)) != 0) {
+            pending_byte = buffer[play_len - 1];
+            has_pending_byte = true;
+            --play_len;
+        }
+        if (play_len > 0) {
+            const esp_err_t err = audio_play_pcm16(buffer.data(), play_len);
+            if (err != ESP_OK) {
+                ESP_LOGW(kTag, "audio pcm failed: %s", esp_err_to_name(err));
+                httpd_resp_set_status(req, "500 Internal Server Error");
+                send_json(req, "{\"ok\":0,\"reason\":\"play failed\"}");
+                return ESP_OK;
+            }
+        }
+        remaining -= static_cast<size_t>(recv_len);
+    }
+    if (has_pending_byte) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        send_json(req, "{\"ok\":0,\"reason\":\"odd pcm size\"}");
+        return ESP_OK;
+    }
+
+    send_json(req, "{\"ok\":1,\"audio\":true}");
+    return ESP_OK;
+}
+
 esp_err_t route_redraw(httpd_req_t *req)
 {
     note_activity();
@@ -1713,13 +1793,14 @@ esp_err_t route_state(httpd_req_t *req)
 {
     char json[608];
     std::snprintf(json, sizeof(json),
-                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"mdns\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"audio\":%s,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"mdns\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
                   static_cast<unsigned>(g_current_view),
                   static_cast<unsigned>(g_current_face),
                   g_busy ? "true" : "false",
                   g_term_mode ? "true" : "false",
                   g_backlight_on ? "true" : "false",
                   g_sleeping ? "true" : "false",
+                  audio_is_ready() ? "true" : "false",
                   static_cast<unsigned>(g_anim_speed),
                   static_cast<unsigned>(g_idle_activity),
                   static_cast<unsigned>(g_backlight_brightness),
@@ -1789,6 +1870,8 @@ esp_err_t start_http_server()
     register_uri("/wifi/scan", HTTP_GET, route_wifi_scan);
     register_uri("/wifi/connect", HTTP_GET, route_wifi_connect);
     register_uri("/wifi/forget", HTTP_GET, route_wifi_forget);
+    register_uri("/audio/test", HTTP_GET, route_audio_test);
+    register_uri("/audio/pcm", HTTP_POST, route_audio_pcm);
     register_uri("/redraw", HTTP_GET, route_redraw);
     register_uri("/canvas", HTTP_GET, route_canvas);
     register_uri("/draw/clear", HTTP_GET, route_draw_clear);
@@ -1928,6 +2011,7 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(nvs_ret);
     ESP_ERROR_CHECK(g_display.init());
+    ESP_ERROR_CHECK(audio_init());
     init_colours();
     load_settings();
     set_brightness(g_backlight_brightness);

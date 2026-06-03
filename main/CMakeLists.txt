@@ -1,11 +1,13 @@
 idf_component_register(
     SRCS
+        "audio.cpp"
         "display.cpp"
         "main.cpp"
     INCLUDE_DIRS
         "."
     REQUIRES
         driver
+        esp_driver_i2s
         esp_http_server
         esp_lcd
         esp_timer
