@@ -226,27 +226,38 @@ py -3 tools\mochi_task.py --name test -- py -3 -m py_compile tools\mochi_bridge.
 | 工具失败 / 任务失败 | 生气 |
 | 等待下一步 | 普通眨眼 |
 
-推荐先保存 ESP32 的 LAN 地址：
+推荐使用一键安装脚本。把 `172.20.10.2` 换成小屏网页或屏幕上显示的 LAN 地址：
 
 ```powershell
-py -3 tools\mochi_bridge.py --set-host 172.20.10.2
+powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHost 172.20.10.2
 ```
 
-然后用包装脚本运行真实 agent：
+安装器会自动完成：
+
+```text
+复制桥接器到 C:\Users\<你>\.codex\mochi-bridge
+保存 ESP32 Host
+写入 Codex 全局 hook
+写入 Claude Code 全局 hook
+发送测试事件
+```
+
+常用维护命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action status
+powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action test
+powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action uninstall
+```
+
+安装后正常打开 Codex / Claude Code 即可。首次加载 hook 时可能会要求在 `/hooks` 中确认信任。确认后，正常交互时会自动把 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 等事件同步到 ESP32。
+
+也可以用包装脚本运行一次性真实 agent：
 
 ```powershell
 tools\codex_mochi.cmd "检查当前项目状态，只回复一句话"
 tools\claude_mochi.cmd "检查当前项目状态，只回复一句话"
 ```
-
-也提供项目级 hooks：
-
-```text
-.codex/hooks.json
-.claude/settings.json
-```
-
-Codex / Claude Code 首次加载项目 hook 时可能会要求在 `/hooks` 中确认信任。确认后，正常交互时会自动把 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 等事件同步到 ESP32。
 
 如果希望任意项目都自动同步，可把同样的 hooks 写到用户级配置：
 

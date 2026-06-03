@@ -56,7 +56,7 @@ def load_saved_host() -> str | None:
     """读取上次保存的 ESP32 地址。"""
     if not CONFIG_PATH.exists():
         return None
-    host = CONFIG_PATH.read_text(encoding="utf-8").strip()
+    host = CONFIG_PATH.read_text(encoding="utf-8-sig").strip().lstrip("\ufeff")
     return host or None
 
 
