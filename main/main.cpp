@@ -101,6 +101,7 @@ esp_ip4_addr_t g_sta_ip = {};
 std::string g_sta_ssid;
 std::string g_sta_password;
 bool g_sta_disabled = false;
+uint8_t g_sta_last_disconnect_reason = 0;
 std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
@@ -184,11 +185,12 @@ function randomColor(){closeCanvas(false);req('/random?what=color').then(()=>ref
 function night(){closeCanvas(false);req('/night').then(()=>refresh())}
 function day(){closeCanvas(false);req('/day').then(()=>refresh())}
 function factoryReset(){closeCanvas(false);if(confirm('恢复默认设置？'))req('/factory').then(()=>refresh())}
-function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
+function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\nWiFi状态: '+(j.reason||'正常')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
 function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function scanWifi(){const n=document.getElementById('nets');n.innerHTML='<option>扫描中...</option>';fetch('/wifi/scan',{cache:'no-store'}).then(r=>r.json()).then(j=>{n.innerHTML='';(j.nets||[]).forEach(x=>{const o=document.createElement('option');o.value=x.ssid;o.textContent=x.ssid+' ('+x.rssi+'dBm)';n.appendChild(o)});if(!n.options.length)n.innerHTML='<option value="">没扫到</option>'})}
-function connectWifi(){const ssid=document.getElementById('nets').value,pwd=document.getElementById('wpwd').value;if(!ssid){alert('先选择 WiFi');return}req('/wifi/connect?ssid='+encodeURIComponent(ssid)+'&pwd='+encodeURIComponent(pwd)).then(()=>setTimeout(refresh,1000))}
-function forgetWifi(){if(confirm('断开并清除保存的 WiFi？'))req('/wifi/forget').then(()=>refresh())}
+function msg(t){const s=document.getElementById('stat');s.classList.add('on');s.innerHTML=t}
+function connectWifi(){const ssid=document.getElementById('nets').value,pwd=document.getElementById('wpwd').value;if(!ssid){alert('先选择 WiFi');return}msg('正在连接 '+ssid+' ...');fetch('/wifi/connect?ssid='+encodeURIComponent(ssid)+'&pwd='+encodeURIComponent(pwd),{cache:'no-store'}).then(r=>r.json()).then(j=>{if(j.connected){msg('连接成功！<br>请跳转到：<a style=\"color:#d65728\" href=\"'+j.url+'\">'+j.url+'</a><br>桥接 host：'+j.ip)}else{msg('连接失败：'+(j.reason||'未知错误')+'<br>请检查密码或距离路由器远近。')}refresh()}).catch(()=>msg('连接请求失败，请重新打开页面再试。'))}
+function forgetWifi(){if(confirm('断开并清除保存的 WiFi？'))req('/wifi/forget').then(()=>{msg('已断开并清除保存的 WiFi。');refresh()})}
 function setCanvasSize(w,h){lcdW=w;lcdH=h;cv.width=w;cv.height=h;cv.style.width=Math.min(300,w*1.6)+'px';cv.style.height=Math.min(300,h*1.6)+'px'}
 function paintCanvasOnly(){const bg=document.getElementById('bg').value;ctx.fillStyle=bg;ctx.fillRect(0,0,lcdW,lcdH)}
 function redraw(){paintCanvasOnly();req('/redraw?bg='+encodeURIComponent(document.getElementById('bg').value))}
@@ -1057,6 +1059,25 @@ std::string sta_password()
     return g_sta_ssid.empty() ? std::string(CONFIG_MOCHI_WIFI_STA_PASSWORD) : g_sta_password;
 }
 
+const char *sta_reason_text(uint8_t reason)
+{
+    switch (reason) {
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+        return "密码可能错误";
+    case WIFI_REASON_NO_AP_FOUND:
+        return "没有找到这个 WiFi";
+    case WIFI_REASON_ASSOC_FAIL:
+    case WIFI_REASON_BEACON_TIMEOUT:
+        return "信号较弱或路由器拒绝连接";
+    case 0:
+        return "连接超时";
+    default:
+        return "连接失败";
+    }
+}
+
 void draw_wifi_info()
 {
     g_display.fillScreen(g_dark_bg);
@@ -1388,6 +1409,9 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
     }
 
     save_sta_credentials(ssid, password);
+    g_sta_connected = false;
+    g_sta_ip.addr = 0;
+    g_sta_last_disconnect_reason = 0;
     wifi_config_t sta_config = {};
     std::strncpy(reinterpret_cast<char *>(sta_config.sta.ssid), g_sta_ssid.c_str(), sizeof(sta_config.sta.ssid));
     std::strncpy(reinterpret_cast<char *>(sta_config.sta.password), g_sta_password.c_str(), sizeof(sta_config.sta.password));
@@ -1395,11 +1419,26 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_disconnect());
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
-    for (uint8_t i = 0; i < 20 && !g_sta_connected; ++i) {
+    for (uint8_t i = 0; i < 32 && !g_sta_connected; ++i) {
         delay_ms(250);
     }
-    draw_wifi_info();
-    send_json(req);
+    if (g_sta_connected) {
+        const std::string ip = sta_ip_text();
+        draw_pet_notice(kFaceHappy, "WiFi OK " + ip);
+        std::string json = "{\"ok\":1,\"connected\":true,\"ip\":\"";
+        json += ip;
+        json += "\",\"url\":\"http://";
+        json += ip;
+        json += "\"}";
+        send_json(req, json.c_str());
+    } else {
+        const char *reason = sta_reason_text(g_sta_last_disconnect_reason);
+        draw_pet_notice(kFaceAngry, reason);
+        std::string json = "{\"ok\":0,\"connected\":false,\"reason\":\"";
+        json += json_escape_ascii(reason, 40);
+        json += "\"}";
+        send_json(req, json.c_str());
+    }
     return ESP_OK;
 }
 
@@ -1408,7 +1447,7 @@ esp_err_t route_wifi_forget(httpd_req_t *req)
     note_activity();
     clear_sta_credentials();
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_disconnect());
-    draw_wifi_info();
+    draw_pet_notice(kFaceNormal, "WiFi forgotten");
     send_json(req);
     return ESP_OK;
 }
@@ -1618,9 +1657,9 @@ esp_err_t route_factory(httpd_req_t *req)
 
 esp_err_t route_state(httpd_req_t *req)
 {
-    char json[448];
+    char json[544];
     std::snprintf(json, sizeof(json),
-                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
                   static_cast<unsigned>(g_current_view),
                   static_cast<unsigned>(g_current_face),
                   g_busy ? "true" : "false",
@@ -1633,6 +1672,7 @@ esp_err_t route_state(httpd_req_t *req)
                   rgb888_to_hex(g_bg_rgb).c_str(),
                   json_escape_ascii(sta_ssid(), 32).c_str(),
                   sta_ip_text().c_str(),
+                  g_sta_connected ? "正常" : json_escape_ascii(sta_reason_text(g_sta_last_disconnect_reason), 40).c_str(),
                   static_cast<long long>(esp_timer_get_time() / 1000000),
                   static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
                   g_display.width(),
@@ -1690,16 +1730,19 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
             esp_wifi_connect();
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        const auto *event = static_cast<wifi_event_sta_disconnected_t *>(event_data);
         g_sta_connected = false;
         g_sta_ip.addr = 0;
+        g_sta_last_disconnect_reason = event ? event->reason : 0;
         if (sta_configured()) {
-            ESP_LOGW(kTag, "station disconnected, retrying");
+            ESP_LOGW(kTag, "station disconnected, reason=%u, retrying", g_sta_last_disconnect_reason);
             esp_wifi_connect();
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         const auto *event = static_cast<ip_event_got_ip_t *>(event_data);
         g_sta_ip = event->ip_info.ip;
         g_sta_connected = true;
+        g_sta_last_disconnect_reason = 0;
         ESP_LOGI(kTag, "station got ip: " IPSTR, IP2STR(&g_sta_ip));
     }
 }
