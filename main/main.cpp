@@ -530,8 +530,12 @@ void draw_sleepy_eyes(uint8_t z_phase = 0)
     if (z_phase > 0) {
         g_display.setTextColor(kBlack);
         g_display.setTextSize(g_display.width() >= 180 ? 2 : 1);
-        g_display.setCursor(g_display.width() - scale_design(64), scale_design(14 + (3 - z_phase) * 10));
-        g_display.print(z_phase == 1 ? "Z" : (z_phase == 2 ? "ZZ" : "ZZZ"));
+        const int16_t base_x = g_display.width() - scale_design(58);
+        const int16_t base_y = scale_design(48);
+        for (uint8_t i = 0; i < z_phase; ++i) {
+            g_display.setCursor(base_x + scale_design(i * 13), base_y - scale_design(i * 13));
+            g_display.print("Z");
+        }
     }
     g_display.flush();
 }
@@ -544,7 +548,7 @@ void draw_happy_eyes(int16_t bounce = 0)
     const int16_t cy = eye_cy() + scale_design(4) + bounce;
     const int eye_w = scale_design(kEyeWDesign);
     const int arm = scale_design(18);
-    const int thk = std::max(2, scale_design(4));
+    const int thk = std::max(3, scale_design(7));
     for (int t = 0; t < thk; ++t) {
         g_display.drawLine(lx, cy + t, lx + eye_w / 2, cy - arm + t, kBlack);
         g_display.drawLine(lx + eye_w / 2, cy - arm + t, lx + eye_w, cy + t, kBlack);
@@ -597,7 +601,7 @@ void draw_wink_eyes()
 void draw_love_eyes(int pulse = 0)
 {
     g_display.fillScreen(g_anim_bg);
-    const int size = std::max(5, scale_design(14) + pulse);
+    const int size = std::max(7, scale_design(17) + pulse);
     auto heart = [&](int cx, int cy) {
         g_display.fillCircle(cx - size / 2, cy - size / 3, size / 2, kBlack);
         g_display.fillCircle(cx + size / 2, cy - size / 3, size / 2, kBlack);
@@ -892,7 +896,7 @@ void task_idle_face(void *)
 {
     uint8_t cycle = 0;
     while (true) {
-        delay_ms(4200);
+        delay_ms(2800);
         if (!can_idle_animate()) {
             continue;
         }
@@ -913,47 +917,47 @@ void task_idle_face(void *)
             draw_squish_eyes(false);
         } else if (g_current_face == kFaceHappy) {
             draw_happy_eyes(-scale_design(5));
-            delay_ms(120);
+            delay_ms(85);
             draw_happy_eyes(scale_design(2));
-            delay_ms(120);
+            delay_ms(85);
             draw_happy_eyes();
         } else if (g_current_face == kFaceSleepy) {
             draw_sleepy_eyes(1);
-            delay_ms(240);
+            delay_ms(160);
             draw_sleepy_eyes(2);
-            delay_ms(240);
+            delay_ms(160);
             draw_sleepy_eyes(3);
-            delay_ms(320);
+            delay_ms(220);
             draw_sleepy_eyes();
         } else if (g_current_face == kFaceAngry) {
             for (uint8_t i = 0; i < 4; ++i) {
                 draw_angry_eyes((i % 2 == 0) ? -scale_design(3) : scale_design(3));
-                delay_ms(80);
+                delay_ms(55);
             }
             draw_angry_eyes();
         } else if (g_current_face == kFaceSurprise) {
             draw_surprise_eyes(scale_design(5));
-            delay_ms(160);
+            delay_ms(110);
             draw_surprise_eyes(-scale_design(3));
-            delay_ms(120);
+            delay_ms(80);
             draw_surprise_eyes();
         } else if (g_current_face == kFaceLove) {
             draw_love_eyes(scale_design(5));
-            delay_ms(140);
+            delay_ms(95);
             draw_love_eyes();
-            delay_ms(110);
+            delay_ms(70);
             draw_love_eyes(scale_design(4));
-            delay_ms(140);
+            delay_ms(95);
             draw_love_eyes();
         } else if (g_current_face == kFaceLook) {
             draw_side_eye(-scale_design(8));
-            delay_ms(260);
+            delay_ms(180);
             draw_side_eye(scale_design(6));
-            delay_ms(260);
+            delay_ms(180);
             draw_side_eye();
         } else if (g_current_face == kFaceWink) {
             draw_normal_eyes();
-            delay_ms(140);
+            delay_ms(95);
             draw_wink_eyes();
         }
         ++cycle;
