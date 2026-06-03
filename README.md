@@ -213,6 +213,41 @@ py -3 tools\mochi_task.py --name test -- py -3 -m py_compile tools\mochi_bridge.
 
 当前 LCD 字体仅支持 ASCII，`text` 建议使用短英文或数字。后续接 Claude/Codex 时，推荐由电脑端桥接器保管 API Key，再通过 `/pet` 把状态推送到 ESP32-S3，避免把密钥写进固件。
 
+### 真实 Agent 状态桥接
+
+项目已提供 Codex / Claude Code 的事件桥接器。它会读取官方 JSON 事件流或 hook 事件，并把状态映射到 ESP32：
+
+| Agent 状态 | ESP32 表情 |
+| --- | --- |
+| 会话开始 | 开心 |
+| 收到用户任务 / 正在思考 | 思考 |
+| 调用工具 / 执行命令 | 左右看 |
+| 工具成功 / 任务完成 | 开心 |
+| 工具失败 / 任务失败 | 生气 |
+| 等待下一步 | 普通眨眼 |
+
+推荐先保存 ESP32 的 LAN 地址：
+
+```powershell
+py -3 tools\mochi_bridge.py --set-host 172.20.10.2
+```
+
+然后用包装脚本运行真实 agent：
+
+```powershell
+tools\codex_mochi.cmd "检查当前项目状态，只回复一句话"
+tools\claude_mochi.cmd "检查当前项目状态，只回复一句话"
+```
+
+也提供项目级 hooks：
+
+```text
+.codex/hooks.json
+.claude/settings.json
+```
+
+Codex / Claude Code 首次加载项目 hook 时可能会要求在 `/hooks` 中确认信任。确认后，正常交互时会自动把 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 等事件同步到 ESP32。
+
 ## 上游来源
 
 原始 Arduino 工程已保留在：

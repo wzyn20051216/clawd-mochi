@@ -10,3 +10,4 @@ dependencies.lock
 *.bak
 __pycache__/
 tools/.mochi_host
+.spec-workflow/
