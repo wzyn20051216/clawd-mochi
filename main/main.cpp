@@ -96,6 +96,7 @@ enum Face : uint8_t {
 
 enum UiEventType : uint8_t {
     kUiEventWifiRetryLater = 1,
+    kUiEventWifiConnected = 2,
 };
 
 struct UiEvent {
@@ -138,6 +139,7 @@ uint8_t g_term_col = 0;
 QueueHandle_t g_voice_cmd_queue = nullptr;
 QueueHandle_t g_ui_event_queue = nullptr;
 uint32_t g_last_voice_say_ms = 0;
+uint32_t g_last_wifi_ok_feedback_ms = 0;
 
 /**
  * @brief 保护 LCD 帧缓冲和 SPI flush，避免多个任务同时改屏幕。
@@ -423,6 +425,7 @@ void set_brightness(uint8_t percent);
 void set_background_rgb(uint32_t rgb);
 void draw_sleepy_eyes(uint8_t z_phase);
 void anim_wake_up();
+std::string sta_ip_text();
 void task_restore_normal_face_once(void *);
 
 void apply_default_settings()
@@ -991,6 +994,25 @@ void post_ui_event(UiEventType type)
     }
 }
 
+/**
+ * @brief 显示并播报 WiFi 重连成功，避免网页连接和 IP 事件重复触发。
+ */
+void show_wifi_connected_feedback()
+{
+    const uint32_t now = tick_ms();
+    if (g_last_wifi_ok_feedback_ms != 0 &&
+        static_cast<int32_t>(now - g_last_wifi_ok_feedback_ms) < 2000) {
+        return;
+    }
+    g_last_wifi_ok_feedback_ms = now;
+    note_activity();
+    wake_from_sleep_if_needed();
+    g_busy = true;
+    draw_pet_notice(kFaceHappy, "WiFi OK " + sta_ip_text());
+    voice_say(kVoiceSayWifiOk, 0);
+    schedule_restore_normal();
+}
+
 void process_voice_module_code(uint16_t code)
 {
     ESP_LOGI(kTag, "voice command code=0x%04X", code);
@@ -1205,6 +1227,9 @@ void task_ui_event(void *)
         switch (event.type) {
         case kUiEventWifiRetryLater:
             draw_pet_notice(kFaceAngry, "WiFi retry later");
+            break;
+        case kUiEventWifiConnected:
+            show_wifi_connected_feedback();
             break;
         default:
             break;
@@ -1899,13 +1924,7 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
     }
     if (g_sta_connected) {
         const std::string ip = sta_ip_text();
-        g_busy = true;
-        draw_pet_notice(kFaceHappy, "WiFi OK " + ip);
-        if (xTaskCreate(task_restore_normal_face_once, "restore_face", 3072, nullptr, 4, nullptr) != pdPASS) {
-            draw_face(kFaceNormal);
-            g_busy = false;
-        }
-        voice_say(kVoiceSayWifiOk, 0);
+        show_wifi_connected_feedback();
         std::string json = "{\"ok\":1,\"connected\":true,\"ip\":\"";
         json += ip;
         json += "\",\"url\":\"http://";
@@ -2275,6 +2294,7 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
         g_sta_last_disconnect_reason = 0;
         g_sta_retry_count = 0;
         ESP_LOGI(kTag, "station got ip: " IPSTR, IP2STR(&g_sta_ip));
+        post_ui_event(kUiEventWifiConnected);
     }
 }
 
