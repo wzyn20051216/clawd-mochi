@@ -49,7 +49,7 @@ Clawd Mochi 是一个 ESP32-S3 桌面小宠物。它有一块小屏幕，可以�
 
 | 名称 | 用途 |
 | --- | --- |
-| Windows 10/11 | 当前项目脚本按 Windows PowerShell 写好 |
+| Windows 10/11、macOS 或 Linux | 固件烧录和电脑端桥接均可使用；Windows 有 PowerShell 脚本，macOS/Linux 用 Python 安装器 |
 | ESP-IDF 5.5.x | 编译和烧录 ESP32-S3 固件 |
 | Python 3 | 运行电脑端桥接器 |
 | VS Code + ESP-IDF 插件 | 推荐开发环境 |
@@ -300,29 +300,51 @@ docs\Clawd_Mochi_命令词播报词协议列表V3_中文.xlsx
 
 推荐测试：
 
+Windows：
+
 ```powershell
 py -3 tools\mochi_bridge.py --ping --host clawd-mochi.local
+```
+
+macOS / Linux：
+
+```bash
+python3 tools/mochi_bridge.py --ping --host clawd-mochi.local
 ```
 
 如果成功，屏幕会有反应。
 
 如果失败，可以使用屏幕上显示的 IP：
 
+Windows：
+
 ```powershell
 py -3 tools\mochi_bridge.py --ping --host 172.20.10.2
 ```
 
+macOS / Linux：
+
+```bash
+python3 tools/mochi_bridge.py --ping --host 172.20.10.2
+```
+
 ### 8.2 安装全局桥接器
 
-执行：
+Windows 执行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHost clawd-mochi.local
 ```
 
+macOS / Linux 执行：
+
+```bash
+python3 tools/install_mochi_bridge.py --host clawd-mochi.local
+```
+
 安装脚本会自动完成：
 
-- 复制桥接器到 `C:\Users\<用户名>\.codex\mochi-bridge`
+- 复制桥接器到用户目录下的 `.codex/mochi-bridge`
 - 保存 ESP32 地址
 - 写入 Codex 全局 hook
 - 写入 Claude Code 全局 hook
@@ -334,26 +356,51 @@ powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHo
 
 查看安装状态：
 
+Windows：
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action status
 ```
 
+macOS / Linux：
+
+```bash
+python3 tools/install_mochi_bridge.py --action status
+```
+
 发送测试事件：
+
+Windows：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action test
 ```
 
+macOS / Linux：
+
+```bash
+python3 tools/install_mochi_bridge.py --action test
+```
+
 卸载 hook：
+
+Windows：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action uninstall
 ```
 
+macOS / Linux：
+
+```bash
+python3 tools/install_mochi_bridge.py --action uninstall
+```
+
 卸载时只移除全局 hook，桥接文件会保留在：
 
 ```text
-C:\Users\<用户名>\.codex\mochi-bridge
+Windows: C:\Users\<用户名>\.codex\mochi-bridge
+macOS/Linux: ~/.codex/mochi-bridge
 ```
 
 ## 9. 常见问题

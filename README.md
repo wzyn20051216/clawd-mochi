@@ -279,16 +279,26 @@ py -3 tools\mochi_task.py --name test -- py -3 -m py_compile tools\mochi_bridge.
 | 工具失败 / 任务失败 | 生气 |
 | 等待下一步 | 普通眨眼 |
 
-推荐使用一键安装脚本。现在优先使用固定 mDNS 地址：
+推荐使用一键安装脚本。现在优先使用固定 mDNS 地址。
+
+Windows：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHost clawd-mochi.local
 ```
 
+macOS / Linux：
+
+```bash
+python3 tools/install_mochi_bridge.py --host clawd-mochi.local
+# 或者
+sh tools/install_mochi_bridge.sh --host clawd-mochi.local
+```
+
 安装器会自动完成：
 
 ```text
-复制桥接器到 C:\Users\<你>\.codex\mochi-bridge
+复制桥接器到用户目录下的 .codex/mochi-bridge
 保存 ESP32 Host
 写入 Codex 全局 hook
 写入 Claude Code 全局 hook
@@ -297,10 +307,20 @@ powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHo
 
 常用维护命令：
 
+Windows：
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action status
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action test
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action uninstall
+```
+
+macOS / Linux：
+
+```bash
+python3 tools/install_mochi_bridge.py --action status
+python3 tools/install_mochi_bridge.py --action test
+python3 tools/install_mochi_bridge.py --action uninstall
 ```
 
 安装后正常打开 Codex / Claude Code 即可。首次加载 hook 时可能会要求在 `/hooks` 中确认信任。确认后，正常交互时会自动把 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 等事件同步到 ESP32。
@@ -315,20 +335,24 @@ tools\claude_mochi.cmd "检查当前项目状态，只回复一句话"
 如果希望任意项目都自动同步，可把同样的 hooks 写到用户级配置：
 
 ```text
-C:\Users\23201\.codex\hooks.json
-C:\Users\23201\.claude\settings.json
+Windows: C:\Users\<你>\.codex\hooks.json
+Windows: C:\Users\<你>\.claude\settings.json
+macOS/Linux: ~/.codex/hooks.json
+macOS/Linux: ~/.claude/settings.json
 ```
 
 全局 hook 命令必须使用 `mochi_event.py` 的绝对路径，例如：
 
 ```text
-py -3 "C:/Users/23201/.codex/mochi-bridge/mochi_event.py"
+Windows: py -3 "C:/Users/<你>/.codex/mochi-bridge/mochi_event.py"
+macOS/Linux: python3 ~/.codex/mochi-bridge/mochi_event.py
 ```
 
 为避免误删项目后全局桥接失效，建议把全局桥接器固定放在：
 
 ```text
-C:\Users\23201\.codex\mochi-bridge
+Windows: C:\Users\<你>\.codex\mochi-bridge
+macOS/Linux: ~/.codex/mochi-bridge
 ```
 
 ## 上游来源
