@@ -1518,9 +1518,11 @@ esp_err_t route_audio_test(httpd_req_t *req)
     const esp_err_t err = audio_play_test_tone();
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "audio test failed: %s", esp_err_to_name(err));
+        draw_pet_notice(kFaceAngry, "Audio fail");
         send_json(req, "{\"ok\":0,\"audio\":false}");
         return ESP_OK;
     }
+    draw_pet_notice(kFaceNormal, "Ready");
     send_json(req, "{\"ok\":1,\"audio\":true}");
     return ESP_OK;
 }
@@ -1547,6 +1549,7 @@ esp_err_t route_audio_pcm(httpd_req_t *req)
             if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
+            draw_pet_notice(kFaceAngry, "Audio recv fail");
             httpd_resp_set_status(req, "400 Bad Request");
             send_json(req, "{\"ok\":0,\"reason\":\"recv failed\"}");
             return ESP_OK;
@@ -1569,6 +1572,7 @@ esp_err_t route_audio_pcm(httpd_req_t *req)
             const esp_err_t err = audio_play_pcm16(buffer.data(), play_len);
             if (err != ESP_OK) {
                 ESP_LOGW(kTag, "audio pcm failed: %s", esp_err_to_name(err));
+                draw_pet_notice(kFaceAngry, "Audio fail");
                 httpd_resp_set_status(req, "500 Internal Server Error");
                 send_json(req, "{\"ok\":0,\"reason\":\"play failed\"}");
                 return ESP_OK;
@@ -1577,11 +1581,13 @@ esp_err_t route_audio_pcm(httpd_req_t *req)
         remaining -= static_cast<size_t>(recv_len);
     }
     if (has_pending_byte) {
+        draw_pet_notice(kFaceAngry, "Audio size fail");
         httpd_resp_set_status(req, "400 Bad Request");
         send_json(req, "{\"ok\":0,\"reason\":\"odd pcm size\"}");
         return ESP_OK;
     }
 
+    draw_pet_notice(kFaceNormal, "Ready");
     send_json(req, "{\"ok\":1,\"audio\":true}");
     return ESP_OK;
 }
