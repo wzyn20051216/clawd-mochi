@@ -140,6 +140,7 @@ QueueHandle_t g_voice_cmd_queue = nullptr;
 QueueHandle_t g_ui_event_queue = nullptr;
 uint32_t g_last_voice_say_ms = 0;
 uint32_t g_last_wifi_ok_feedback_ms = 0;
+uint32_t g_last_wifi_fail_feedback_ms = 0;
 
 /**
  * @brief 保护 LCD 帧缓冲和 SPI flush，避免多个任务同时改屏幕。
@@ -1013,6 +1014,27 @@ void show_wifi_connected_feedback()
     schedule_restore_normal();
 }
 
+/**
+ * @brief 显示并播报 WiFi 暂时不可用，随后恢复普通表情并保持后台重试。
+ *
+ * @param force true 表示上电等关键节点强制提示一次；false 表示按 30 秒节流。
+ */
+void show_wifi_retry_later_feedback(bool force = false)
+{
+    const uint32_t now = tick_ms();
+    if (!force && g_last_wifi_fail_feedback_ms != 0 &&
+        static_cast<int32_t>(now - g_last_wifi_fail_feedback_ms) < 30000) {
+        return;
+    }
+    g_last_wifi_fail_feedback_ms = now;
+    note_activity();
+    wake_from_sleep_if_needed();
+    g_busy = true;
+    draw_pet_notice(kFaceAngry, "WiFi retry later");
+    voice_say(kVoiceSayWifiFail, force ? 0 : 30000);
+    schedule_restore_normal();
+}
+
 void process_voice_module_code(uint16_t code)
 {
     ESP_LOGI(kTag, "voice command code=0x%04X", code);
@@ -1226,7 +1248,7 @@ void task_ui_event(void *)
         }
         switch (event.type) {
         case kUiEventWifiRetryLater:
-            draw_pet_notice(kFaceAngry, "WiFi retry later");
+            show_wifi_retry_later_feedback();
             break;
         case kUiEventWifiConnected:
             show_wifi_connected_feedback();
@@ -2427,9 +2449,15 @@ extern "C" void app_main(void)
     for (uint8_t i = 0; i < 20 && sta_configured() && !g_sta_connected; ++i) {
         delay_ms(250);
     }
+    const bool startup_wifi_failed = sta_configured() && !g_sta_connected;
     draw_wifi_info();
-    delay_ms(2200);
-    anim_wake_up();
+    if (startup_wifi_failed) {
+        show_wifi_retry_later_feedback(true);
+        delay_ms(3200);
+    } else {
+        delay_ms(2200);
+        anim_wake_up();
+    }
     xTaskCreate(task_idle_face, "idle_face", 4096, nullptr, 4, nullptr);
 
     while (true) {
