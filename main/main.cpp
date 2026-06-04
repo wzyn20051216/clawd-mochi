@@ -635,6 +635,70 @@ int16_t eye_cy()
     return eye_y() + scale_design(kEyeHDesign) / 2;
 }
 
+uint16_t face_accent_color(uint32_t rgb)
+{
+    return rgb888_to_rgb565(rgb);
+}
+
+void draw_thick_line(int x0, int y0, int x1, int y1, int radius, uint16_t color)
+{
+    const int r = std::max(0, radius);
+    for (int off = -r; off <= r; ++off) {
+        g_display.drawLine(x0 + off, y0, x1 + off, y1, color);
+        g_display.drawLine(x0, y0 + off, x1, y1 + off, color);
+    }
+}
+
+void draw_text_tag(const char *text, int y_offset = 0)
+{
+    if (g_display.height() < 135 || text == nullptr || text[0] == '\0') {
+        return;
+    }
+    const int size = g_display.width() >= 200 ? 2 : 1;
+    const int len = static_cast<int>(std::strlen(text));
+    const int x = std::max(2, (g_display.width() - len * 6 * size) / 2);
+    const int y = std::min(g_display.height() - 10 * size - 2, g_display.height() - scale_design(36) + y_offset);
+    g_display.setTextColor(kBlack);
+    g_display.setTextSize(size);
+    g_display.setCursor(x, y);
+    g_display.print(text);
+}
+
+void draw_blush(int cx, int cy)
+{
+    const uint16_t blush = face_accent_color(0xE45858);
+    const int r = std::max(1, scale_design(3));
+    const int gap = std::max(3, scale_design(8));
+    g_display.fillCircle(cx - gap, cy, r, blush);
+    g_display.fillCircle(cx, cy + std::max(1, scale_design(2)), r, blush);
+    g_display.fillCircle(cx + gap, cy, r, blush);
+}
+
+void draw_small_heart(int cx, int cy, int size, uint16_t color)
+{
+    const int s = std::max(3, size);
+    g_display.fillCircle(cx - s / 2, cy - s / 3, std::max(1, s / 2), color);
+    g_display.fillCircle(cx + s / 2, cy - s / 3, std::max(1, s / 2), color);
+    g_display.fillTriangle(cx - s, cy - s / 5, cx + s, cy - s / 5, cx, cy + s, color);
+}
+
+void draw_sparkle(int cx, int cy, int size, uint16_t color)
+{
+    const int s = std::max(3, size);
+    draw_thick_line(cx, cy - s, cx, cy + s, 0, color);
+    draw_thick_line(cx - s, cy, cx + s, cy, 0, color);
+    draw_thick_line(cx - s / 2, cy - s / 2, cx + s / 2, cy + s / 2, 0, color);
+    draw_thick_line(cx + s / 2, cy - s / 2, cx - s / 2, cy + s / 2, 0, color);
+}
+
+void draw_sweat_drop(int cx, int cy, int size)
+{
+    const uint16_t blue = face_accent_color(0x4DB3FF);
+    const int s = std::max(4, size);
+    g_display.fillCircle(cx, cy + s / 3, s / 2, blue);
+    g_display.fillTriangle(cx, cy - s, cx - s / 2, cy + s / 3, cx + s / 2, cy + s / 3, blue);
+}
+
 void draw_normal_eyes(int16_t ox = 0, bool blink = false)
 {
     g_display.fillScreen(g_anim_bg);
@@ -646,6 +710,10 @@ void draw_normal_eyes(int16_t ox = 0, bool blink = false)
     if (!blink) {
         g_display.fillRect(lx, ey, eye_w, eye_h, kBlack);
         g_display.fillRect(rx, ey, eye_w, eye_h, kBlack);
+        const int mouth_y = eye_cy() + scale_design(44);
+        const int mouth_x = g_display.width() / 2;
+        draw_thick_line(mouth_x - scale_design(9), mouth_y, mouth_x - scale_design(3), mouth_y + scale_design(5), scale_design(1), kBlack);
+        draw_thick_line(mouth_x + scale_design(3), mouth_y + scale_design(5), mouth_x + scale_design(9), mouth_y, scale_design(1), kBlack);
     } else {
         g_display.fillRect(lx, ey + eye_h / 2 - 2, eye_w, 4, kBlack);
         g_display.fillRect(rx, ey + eye_h / 2 - 2, eye_w, 4, kBlack);
@@ -691,6 +759,8 @@ void draw_squish_eyes(bool closed = false)
     if (!closed) {
         draw_chevron(lx + eye_w / 2, cy, eye_h / 2, eye_w / 2, std::max(3, scale_design(10)), true, kBlack);
         draw_chevron(rx + eye_w / 2, cy, eye_h / 2, eye_w / 2, std::max(3, scale_design(10)), false, kBlack);
+        draw_blush(lx + eye_w / 2 - scale_design(22), cy + scale_design(22));
+        draw_blush(rx + eye_w / 2 + scale_design(22), cy + scale_design(22));
     } else {
         g_display.fillRect(lx, cy - 3, eye_w, 6, kBlack);
         g_display.fillRect(rx, cy - 3, eye_w, 6, kBlack);
@@ -706,18 +776,21 @@ void draw_sleepy_eyes(uint8_t z_phase = 0)
     const int16_t cy = eye_cy();
     const int eye_w = scale_design(kEyeWDesign);
     const int thk = std::max(3, scale_design(7));
-    g_display.fillRect(lx, cy - thk / 2, eye_w, thk, kBlack);
-    g_display.fillRect(rx, cy - thk / 2, eye_w, thk, kBlack);
+    draw_thick_line(lx, cy, lx + eye_w / 2, cy + scale_design(5), thk / 2, kBlack);
+    draw_thick_line(lx + eye_w / 2, cy + scale_design(5), lx + eye_w, cy, thk / 2, kBlack);
+    draw_thick_line(rx, cy, rx + eye_w / 2, cy + scale_design(5), thk / 2, kBlack);
+    draw_thick_line(rx + eye_w / 2, cy + scale_design(5), rx + eye_w, cy, thk / 2, kBlack);
     if (z_phase > 0) {
         g_display.setTextColor(kBlack);
         g_display.setTextSize(g_display.width() >= 180 ? 2 : 1);
-        const int16_t base_x = g_display.width() - scale_design(58);
-        const int16_t base_y = scale_design(48);
+        const int16_t base_x = g_display.width() - scale_design(62);
+        const int16_t base_y = scale_design(68);
         for (uint8_t i = 0; i < z_phase; ++i) {
             g_display.setCursor(base_x + scale_design(i * 13), base_y - scale_design(i * 13));
             g_display.print("Z");
         }
     }
+    draw_text_tag("SLEEP");
     g_display.flush();
 }
 
@@ -730,12 +803,14 @@ void draw_happy_eyes(int16_t bounce = 0)
     const int eye_w = scale_design(kEyeWDesign);
     const int arm = scale_design(18);
     const int thk = std::max(3, scale_design(7));
-    for (int t = 0; t < thk; ++t) {
-        g_display.drawLine(lx, cy + t, lx + eye_w / 2, cy - arm + t, kBlack);
-        g_display.drawLine(lx + eye_w / 2, cy - arm + t, lx + eye_w, cy + t, kBlack);
-        g_display.drawLine(rx, cy + t, rx + eye_w / 2, cy - arm + t, kBlack);
-        g_display.drawLine(rx + eye_w / 2, cy - arm + t, rx + eye_w, cy + t, kBlack);
-    }
+    draw_thick_line(lx, cy, lx + eye_w / 2, cy - arm, thk / 2, kBlack);
+    draw_thick_line(lx + eye_w / 2, cy - arm, lx + eye_w, cy, thk / 2, kBlack);
+    draw_thick_line(rx, cy, rx + eye_w / 2, cy - arm, thk / 2, kBlack);
+    draw_thick_line(rx + eye_w / 2, cy - arm, rx + eye_w, cy, thk / 2, kBlack);
+    draw_blush(lx + eye_w / 2 - scale_design(26), cy + scale_design(20));
+    draw_blush(rx + eye_w / 2 + scale_design(26), cy + scale_design(20));
+    draw_sparkle(rx + eye_w + scale_design(24), cy - scale_design(30), scale_design(8), face_accent_color(0xFFE066));
+    draw_text_tag("HAPPY");
     g_display.flush();
 }
 
@@ -751,8 +826,12 @@ void draw_angry_eyes(int16_t jitter = 0)
         g_display.drawLine(lx, ey + i, lx + eye_w, ey + scale_design(18) + i, kBlack);
         g_display.drawLine(rx, ey + scale_design(18) + i, rx + eye_w, ey + i, kBlack);
     }
-    g_display.fillRect(lx - scale_design(2), ey - scale_design(13), eye_w + scale_design(8), std::max(2, scale_design(4)), kBlack);
-    g_display.fillRect(rx - scale_design(6), ey - scale_design(13), eye_w + scale_design(8), std::max(2, scale_design(4)), kBlack);
+    draw_thick_line(lx - scale_design(8), ey - scale_design(18), lx + eye_w + scale_design(8), ey - scale_design(8), scale_design(3), kBlack);
+    draw_thick_line(rx - scale_design(8), ey - scale_design(8), rx + eye_w + scale_design(8), ey - scale_design(18), scale_design(3), kBlack);
+    const uint16_t red = face_accent_color(0xF04A32);
+    draw_thick_line(g_display.width() - scale_design(40), scale_design(42), g_display.width() - scale_design(22), scale_design(24), scale_design(1), red);
+    draw_thick_line(g_display.width() - scale_design(39), scale_design(24), g_display.width() - scale_design(23), scale_design(42), scale_design(1), red);
+    draw_text_tag("ERROR");
     g_display.flush();
 }
 
@@ -760,9 +839,16 @@ void draw_surprise_eyes(int radius_delta = 0)
 {
     g_display.fillScreen(g_anim_bg);
     const int radius = std::max(4, scale_design(15) + radius_delta);
-    g_display.fillCircle(eye_lx(0) + scale_design(kEyeWDesign) / 2, eye_cy(), radius, kBlack);
-    g_display.fillCircle(eye_rx(0) + scale_design(kEyeWDesign) / 2, eye_cy(), radius, kBlack);
-    g_display.fillCircle(g_display.width() / 2, g_display.height() - scale_design(36), std::max(2, scale_design(6)), kBlack);
+    const int lcx = eye_lx(0) + scale_design(kEyeWDesign) / 2;
+    const int rcx = eye_rx(0) + scale_design(kEyeWDesign) / 2;
+    const int cy = eye_cy();
+    g_display.fillCircle(lcx, cy, radius, kBlack);
+    g_display.fillCircle(rcx, cy, radius, kBlack);
+    g_display.fillCircle(lcx + radius / 3, cy - radius / 3, std::max(1, radius / 4), g_anim_bg);
+    g_display.fillCircle(rcx + radius / 3, cy - radius / 3, std::max(1, radius / 4), g_anim_bg);
+    g_display.fillCircle(g_display.width() / 2, g_display.height() - scale_design(38), std::max(2, scale_design(7)), kBlack);
+    draw_sweat_drop(rcx + scale_design(34), cy - scale_design(30), scale_design(10));
+    draw_text_tag("WOW");
     g_display.flush();
 }
 
@@ -775,21 +861,29 @@ void draw_wink_eyes()
     const int eye_w = scale_design(kEyeWDesign);
     const int eye_h = scale_design(kEyeHDesign);
     g_display.fillRect(lx, ey, eye_w, eye_h, kBlack);
-    g_display.fillRect(rx, eye_cy() - scale_design(3), eye_w, std::max(3, scale_design(6)), kBlack);
+    const int cy = eye_cy();
+    draw_thick_line(rx, cy, rx + eye_w / 2, cy + scale_design(6), scale_design(3), kBlack);
+    draw_thick_line(rx + eye_w / 2, cy + scale_design(6), rx + eye_w, cy, scale_design(3), kBlack);
+    draw_small_heart(rx + eye_w + scale_design(20), cy - scale_design(24), scale_design(7), face_accent_color(0xF0445E));
+    draw_blush(lx - scale_design(18), cy + scale_design(18));
+    draw_text_tag("HI");
     g_display.flush();
 }
 
 void draw_love_eyes(int pulse = 0)
 {
     g_display.fillScreen(g_anim_bg);
-    const int size = std::max(7, scale_design(17) + pulse);
+    const int size = std::max(10, scale_design(21) + pulse);
+    const uint16_t heart_col = face_accent_color(0xE91E63);
     auto heart = [&](int cx, int cy) {
-        g_display.fillCircle(cx - size / 2, cy - size / 3, size / 2, kBlack);
-        g_display.fillCircle(cx + size / 2, cy - size / 3, size / 2, kBlack);
-        g_display.fillTriangle(cx - size, cy - size / 4, cx + size, cy - size / 4, cx, cy + size, kBlack);
+        g_display.fillCircle(cx - size / 2, cy - size / 3, size / 2, heart_col);
+        g_display.fillCircle(cx + size / 2, cy - size / 3, size / 2, heart_col);
+        g_display.fillTriangle(cx - size, cy - size / 4, cx + size, cy - size / 4, cx, cy + size, heart_col);
     };
     heart(eye_lx(0) + scale_design(kEyeWDesign) / 2, eye_cy());
     heart(eye_rx(0) + scale_design(kEyeWDesign) / 2, eye_cy());
+    draw_small_heart(g_display.width() / 2, eye_cy() + scale_design(38), scale_design(8) + pulse / 3, heart_col);
+    draw_text_tag("LOVE");
     g_display.flush();
 }
 
@@ -801,8 +895,16 @@ void draw_side_eye(int16_t glance = 0)
     const int16_t ey = eye_y() + scale_design(12);
     const int eye_w = scale_design(kEyeWDesign);
     const int eye_h = std::max(8, scale_design(18));
-    g_display.fillRect(lx, ey, eye_w + scale_design(10), eye_h, kBlack);
-    g_display.fillRect(rx, ey, eye_w + scale_design(10), eye_h, kBlack);
+    g_display.fillRect(lx, ey, eye_w + scale_design(12), eye_h, kBlack);
+    g_display.fillRect(rx, ey, eye_w + scale_design(12), eye_h, kBlack);
+    const int pupil = std::max(2, scale_design(5));
+    g_display.fillRect(lx + eye_w - scale_design(4), ey, pupil, eye_h, g_anim_bg);
+    g_display.fillRect(rx + eye_w - scale_design(4), ey, pupil, eye_h, g_anim_bg);
+    g_display.setTextColor(kBlack);
+    g_display.setTextSize(g_display.width() >= 200 ? 2 : 1);
+    g_display.setCursor(g_display.width() / 2 - scale_design(14), ey + eye_h + scale_design(14));
+    g_display.print("...");
+    draw_text_tag("WORK", scale_design(8));
     g_display.flush();
 }
 
