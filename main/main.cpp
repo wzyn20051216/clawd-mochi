@@ -1677,6 +1677,33 @@ esp_err_t route_face(httpd_req_t *req)
     return ESP_OK;
 }
 
+bool contains_status_word(std::string text, const char *word)
+{
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return text.find(word) != std::string::npos;
+}
+
+void voice_say_pet_status(const std::string &mood, const std::string &text)
+{
+    if (mood == "error" || mood == "fail" || mood == "angry" ||
+        contains_status_word(text, "fail") || contains_status_word(text, "error")) {
+        voice_say(kVoiceSayError);
+    } else if (mood == "speaking" || contains_status_word(text, "speaking")) {
+        voice_say(kVoiceSaySpeaking);
+    } else if (mood == "thinking" || contains_status_word(text, "thinking")) {
+        voice_say(kVoiceSayThinking);
+    } else if (mood == "running" || mood == "busy" || contains_status_word(text, "running")) {
+        voice_say(kVoiceSayRunning);
+    } else if (contains_status_word(text, "ready") || contains_status_word(text, "done") ||
+               contains_status_word(text, "completed") || contains_status_word(text, " ok")) {
+        voice_say(kVoiceSayDone);
+    } else if (mood == "idle" || mood == "sleepy" || contains_status_word(text, "sleep")) {
+        voice_say(kVoiceSaySleep);
+    }
+}
+
 esp_err_t route_pet(httpd_req_t *req)
 {
     note_activity();
@@ -1684,19 +1711,7 @@ esp_err_t route_pet(httpd_req_t *req)
     const std::string text = query_value(req, "text", 256);
     mark_manual_animation();
     draw_pet_notice(mood_to_face(mood), text);
-    if (mood == "thinking" || mood == "look") {
-        voice_say(kVoiceSayThinking);
-    } else if (mood == "running" || mood == "busy") {
-        voice_say(kVoiceSayRunning);
-    } else if (mood == "speaking") {
-        voice_say(kVoiceSaySpeaking);
-    } else if (mood == "done" || mood == "ok" || mood == "happy") {
-        voice_say(kVoiceSayDone);
-    } else if (mood == "error" || mood == "fail" || mood == "angry") {
-        voice_say(kVoiceSayError);
-    } else if (mood == "idle" || mood == "sleepy") {
-        voice_say(kVoiceSaySleep);
-    }
+    voice_say_pet_status(mood, text);
     send_json(req);
     return ESP_OK;
 }

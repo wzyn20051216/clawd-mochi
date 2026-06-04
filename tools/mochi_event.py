@@ -163,8 +163,8 @@ def hook_stdout(data: dict[str, Any]) -> None:
 
 
 def speak_hook_event(host_arg: str | None, data: dict[str, Any], timeout: float) -> None:
-    """按环境变量启用轻量语音播报，避免默认过于吵闹。"""
-    if os.environ.get("MOCHI_SPEAK", "").lower() not in {"1", "true", "yes", "on"}:
+    """兼容旧版 Windows TTS；默认改由 ESP32 控制语音模块播报。"""
+    if os.environ.get("MOCHI_TTS_LEGACY", "").lower() not in {"1", "true", "yes", "on"}:
         return
     event = str(data.get("hook_event_name") or data.get("event") or "")
     text = stop_transcript_reply(data) if event == "Stop" else ""

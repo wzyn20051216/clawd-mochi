@@ -28,7 +28,7 @@ $ErrorActionPreference = "Stop"
 
 $Events = @("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$SourceFiles = @("mochi_bridge.py", "mochi_audio.py", "mochi_event.py")
+$SourceFiles = @("mochi_bridge.py", "mochi_audio.py", "mochi_event.py", "agent_mochi.py")
 $CodexHome = Join-Path $env:USERPROFILE ".codex"
 $ClaudeHome = Join-Path $env:USERPROFILE ".claude"
 $CodexHooksPath = Join-Path $CodexHome "hooks.json"

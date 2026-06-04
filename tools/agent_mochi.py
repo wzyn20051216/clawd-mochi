@@ -46,8 +46,8 @@ def send_status(host_arg: str | None, mood: str, text: str, timeout: float) -> N
 
 
 def speak_status(host_arg: str | None, text: str, timeout: float) -> None:
-    """可选语音播报，失败时不影响 agent 主流程。"""
-    if os.environ.get("MOCHI_SPEAK", "").lower() not in {"1", "true", "yes", "on"}:
+    """兼容旧版 Windows TTS；默认改由 ESP32 控制语音模块播报。"""
+    if os.environ.get("MOCHI_TTS_LEGACY", "").lower() not in {"1", "true", "yes", "on"}:
         return
     try:
         speak_auto(host_arg, text, max(5.0, timeout), os.environ.get("MOCHI_VOICE", ""), 0, 90)
@@ -56,8 +56,8 @@ def speak_status(host_arg: str | None, text: str, timeout: float) -> None:
 
 
 def speech_enabled() -> bool:
-    """是否启用 ESP32 语音播报。"""
-    return os.environ.get("MOCHI_SPEAK", "").lower() in {"1", "true", "yes", "on"}
+    """是否启用旧版 Windows TTS。"""
+    return os.environ.get("MOCHI_TTS_LEGACY", "").lower() in {"1", "true", "yes", "on"}
 
 
 def speak_text(host_arg: str | None, text: str, timeout: float) -> None:
