@@ -913,7 +913,7 @@ void process_voice_module_code(uint16_t code)
         voice_say(kVoiceSaySleep, 0);
         break;
     case 0x026F:
-        draw_voice_notice(kFaceSleepy, "Rest");
+        ESP_LOGI(kTag, "ignore module rest prompt frame; mochi sleep is state-driven");
         break;
     case 0x0400:
     case 0x0027:
