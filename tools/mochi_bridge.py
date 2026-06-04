@@ -13,14 +13,18 @@ import argparse
 import asyncio
 import json
 import os
+import queue
 import socket
 import struct
+import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 CONFIG_PATH = Path(__file__).with_name(".mochi_host")
@@ -33,6 +37,9 @@ BLE_STATUS_UUID = "6d6f6368-692d-7065-742d-737461747573"
 BLE_MODE_UUID = "6d6f6368-692d-7065-742d-62726964676d"
 BLE_DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 BRIDGE_MODES = {"auto", "ble", "wifi"}
+DAEMON_HOST = "127.0.0.1"
+DAEMON_PORT = int(os.environ.get("MOCHI_DAEMON_PORT", "27665"))
+DAEMON_DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 
 
 MOOD_ALIASES = {
@@ -350,11 +357,333 @@ def hold_ble(seconds: float, timeout: float) -> dict:
     return asyncio.run(hold_ble_async(seconds, timeout))
 
 
-def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float) -> tuple[str, dict]:
+class DaemonRequest:
+    """后台桥接器内部的一次桌宠事件请求。"""
+
+    def __init__(self, host_arg: str | None, mood: str, text: str, timeout: float):
+        self.host_arg = host_arg
+        self.mood = normalize_mood(mood)
+        self.text = text
+        self.timeout = max(0.5, min(timeout, 10.0))
+        self.created_at = time.monotonic()
+        self.reply: queue.Queue[dict] = queue.Queue(maxsize=1)
+
+    def respond(self, payload: dict) -> None:
+        """把发送结果回传给 HTTP 请求线程。"""
+        try:
+            self.reply.put_nowait(payload)
+        except queue.Full:
+            pass
+
+
+class MochiDaemonState:
+    """后台桥接器共享状态。"""
+
+    def __init__(self, host_arg: str | None):
+        self.host_arg = host_arg
+        self.requests: queue.Queue[DaemonRequest] = queue.Queue(maxsize=64)
+        self.lock = threading.Lock()
+        self.status: dict = {
+            "ok": 1,
+            "daemon": True,
+            "connected": False,
+            "transport": "idle",
+            "bridge_mode": "auto",
+            "phase": "starting",
+        }
+
+    def update(self, **values: object) -> None:
+        """线程安全地更新状态快照。"""
+        with self.lock:
+            self.status.update(values)
+            self.status["updated_at"] = time.time()
+
+    def snapshot(self) -> dict:
+        """返回当前后台状态。"""
+        with self.lock:
+            return dict(self.status)
+
+
+def daemon_client_host() -> str:
+    """返回 hook 访问的本机后台地址；默认是当前电脑自己的 loopback。"""
+    return os.environ.get("MOCHI_DAEMON_HOST", DAEMON_HOST).strip() or DAEMON_HOST
+
+
+def daemon_enabled() -> bool:
+    """判断普通 CLI / hook 是否优先走本机常驻桥接器。"""
+    if os.environ.get("MOCHI_IN_DAEMON") == "1":
+        return False
+    return os.environ.get("MOCHI_DAEMON", "1").strip().lower() not in DAEMON_DISABLED_VALUES
+
+
+def daemon_autostart_enabled() -> bool:
+    """判断 hook 找不到后台服务时是否自动拉起。"""
+    return os.environ.get("MOCHI_DAEMON_AUTOSTART", "1").strip().lower() not in DAEMON_DISABLED_VALUES
+
+
+def daemon_post(path: str, payload: dict | None, timeout: float) -> dict:
+    """向本机常驻桥接器发送 JSON 请求。"""
+    url = f"http://{daemon_client_host()}:{DAEMON_PORT}{path}"
+    data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=max(0.3, min(timeout, 10.0))) as response:
+        body = response.read().decode("utf-8", errors="replace")
+    result = json.loads(body or "{}")
+    return result if isinstance(result, dict) else {"raw": result}
+
+
+def daemon_status(timeout: float = 0.5) -> dict:
+    """读取本机后台桥接器状态。"""
+    return daemon_post("/status", None, timeout)
+
+
+def send_pet_daemon(host_arg: str | None, mood: str, text: str, timeout: float) -> dict:
+    """通过本机常驻桥接器发送桌宠状态。"""
+    result = daemon_post("/pet", {"host": host_arg, "mood": mood, "text": text, "timeout": timeout}, timeout + 1.0)
+    if result.get("ok") != 1:
+        raise RuntimeError(str(result.get("error") or result))
+    return result
+
+
+def start_daemon_background(host_arg: str | None = None) -> bool:
+    """后台拉起常驻桥接器；默认只监听当前用户电脑的 loopback。"""
+    try:
+        if daemon_status(0.3).get("daemon"):
+            return True
+    except Exception:
+        pass
+
+    command = [sys.executable, str(Path(__file__).resolve()), "--daemon"]
+    if host_arg:
+        command.extend(["--host", host_arg])
+    env = os.environ.copy()
+    env["MOCHI_IN_DAEMON"] = "1"
+    env.setdefault("MOCHI_DAEMON_AUTOSTART", "0")
+    log_path = Path(__file__).with_name("mochi_daemon.log")
+    creationflags = 0
+    start_new_session = False
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+    else:
+        start_new_session = True
+    with log_path.open("ab") as output:
+        subprocess.Popen(
+            command,
+            cwd=str(Path(__file__).resolve().parent),
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            env=env,
+            creationflags=creationflags,
+            start_new_session=start_new_session,
+        )
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            if daemon_status(0.5).get("daemon"):
+                return True
+        except Exception:
+            time.sleep(0.2)
+    return False
+
+
+async def daemon_worker(state: MochiDaemonState) -> None:
+    """常驻 BLE 工作循环：保持连接、消费本机 hook 事件、断线自动重连。"""
+    try:
+        from bleak import BleakClient
+    except ImportError as exc:
+        state.update(connected=False, phase="missing_bleak", error="bleak not installed")
+        raise RuntimeError("bleak not installed") from exc
+
+    client = None
+    device_address = ""
+    last_keepalive = 0.0
+    while True:
+        try:
+            if client is None or not getattr(client, "is_connected", False):
+                state.update(connected=False, transport="ble", phase="scan")
+                device = await find_ble_device(5.0)
+                if device is None:
+                    raise TimeoutError("BLE device not found")
+                client = BleakClient(device, timeout=8.0)
+                await client.connect()
+                device_address = str(device.address)
+                state.update(connected=True, transport="ble", device=device_address, phase="connected")
+
+            try:
+                request = await asyncio.to_thread(state.requests.get, True, 1.0)
+            except queue.Empty:
+                now = time.monotonic()
+                if now - last_keepalive >= 15.0:
+                    raw = await client.read_gatt_char(BLE_MODE_UUID)
+                    mode = normalize_bridge_mode(bytes(raw).decode("ascii", errors="ignore"))
+                    state.update(connected=True, bridge_mode=mode, phase="idle")
+                    last_keepalive = now
+                continue
+
+            try:
+                if time.monotonic() - request.created_at > request.timeout + 0.5:
+                    request.respond({"ok": 0, "error": "stale daemon request"})
+                    continue
+                raw = await client.read_gatt_char(BLE_MODE_UUID)
+                mode = normalize_bridge_mode(bytes(raw).decode("ascii", errors="ignore"))
+                if mode == "wifi":
+                    host, result = await asyncio.to_thread(
+                        send_pet_wifi_candidates,
+                        request.host_arg or state.host_arg,
+                        request.mood,
+                        request.text,
+                        request.timeout,
+                        None,
+                    )
+                    payload = {"ok": 1, "transport": "wifi-daemon", "host": host, "bridge_mode": mode, "result": result}
+                else:
+                    await client.write_gatt_char(BLE_STATUS_UUID, ble_payload(request.mood, request.text), response=False)
+                    payload = {"ok": 1, "transport": "ble-daemon", "device": device_address, "bridge_mode": mode}
+                request.respond(payload)
+                state.update(connected=True, bridge_mode=mode, phase="idle", last_mood=request.mood, last_text=request.text)
+            except Exception as exc:  # noqa: BLE001 - 单次发送失败后重连。
+                request.respond({"ok": 0, "error": str(exc)})
+                state.update(phase="send_error", error=str(exc))
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                client = None
+        except Exception as exc:  # noqa: BLE001 - 后台循环必须自恢复。
+            state.update(connected=False, phase="reconnect", error=str(exc))
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                client = None
+            await asyncio.sleep(2.0)
+
+
+class MochiDaemonHandler(BaseHTTPRequestHandler):
+    """只监听本机 loopback 的轻量 HTTP 服务，供 hook 投递状态事件。"""
+
+    server_version = "ClawdMochiDaemon/1.0"
+
+    def log_message(self, format: str, *args: object) -> None:
+        """禁止每次 hook 访问都刷终端。"""
+        return
+
+    def send_json(self, payload: dict, status: int = 200) -> None:
+        """返回 JSON 响应。"""
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    @property
+    def daemon_state(self) -> MochiDaemonState:
+        """取出挂在 HTTP server 上的共享状态。"""
+        return self.server.mochi_state  # type: ignore[attr-defined]
+
+    def do_GET(self) -> None:
+        """处理状态查询和简单 GET 发送。"""
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/status":
+            self.send_json(self.daemon_state.snapshot())
+            return
+        if parsed.path == "/shutdown":
+            self.send_json({"ok": 1, "daemon": True, "stopping": True})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return
+        if parsed.path == "/pet":
+            params = urllib.parse.parse_qs(parsed.query)
+            self.handle_pet({
+                "mood": (params.get("mood") or ["normal"])[0],
+                "text": (params.get("text") or [""])[0],
+                "host": (params.get("host") or [None])[0],
+                "timeout": (params.get("timeout") or ["3"])[0],
+            })
+            return
+        self.send_json({"ok": 0, "error": "not found"}, 404)
+
+    def do_POST(self) -> None:
+        """处理 hook 投递的桌宠事件。"""
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/pet":
+            self.send_json({"ok": 0, "error": "not found"}, 404)
+            return
+        length = min(int(self.headers.get("Content-Length") or "0"), 4096)
+        raw = self.rfile.read(length).decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        self.handle_pet(payload if isinstance(payload, dict) else {})
+
+    def handle_pet(self, payload: dict) -> None:
+        """把 HTTP 请求转成后台 BLE 队列事件。"""
+        timeout = float(payload.get("timeout") or 3.0)
+        request = DaemonRequest(
+            str(payload.get("host") or "") or None,
+            str(payload.get("mood") or "normal"),
+            str(payload.get("text") or ""),
+            timeout,
+        )
+        try:
+            self.daemon_state.requests.put_nowait(request)
+        except queue.Full:
+            self.send_json({"ok": 0, "error": "daemon queue full"}, 503)
+            return
+        try:
+            result = request.reply.get(timeout=request.timeout + 0.5)
+        except queue.Empty:
+            result = {"ok": 0, "error": "daemon send timeout"}
+        self.send_json(result, 200 if result.get("ok") == 1 else 503)
+
+
+def run_daemon(host_arg: str | None) -> int:
+    """启动本机常驻桥接器，长期保持 BLE 连接并等待 hook 事件。"""
+    configure_stdio()
+    state = MochiDaemonState(host_arg)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", DAEMON_PORT), MochiDaemonHandler)
+    except OSError as exc:
+        print(f"后台桥接器可能已在运行：{exc}")
+        return 0
+    server.mochi_state = state  # type: ignore[attr-defined]
+    worker = threading.Thread(target=lambda: asyncio.run(daemon_worker(state)), name="mochi_ble", daemon=True)
+    worker.start()
+    state.update(phase="listening", url=f"http://127.0.0.1:{DAEMON_PORT}")
+    print(f"Clawd Mochi 后台桥接器已启动：http://127.0.0.1:{DAEMON_PORT}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+def stop_daemon(timeout: float = 1.0) -> dict:
+    """请求本机后台桥接器退出。"""
+    return daemon_post("/shutdown", None, timeout)
+
+
+def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float, use_daemon: bool = True) -> tuple[str, dict]:
     """按设备桥接模式发送：auto=BLE优先，ble=只BLE，wifi=只WiFi。"""
     force = normalize_bridge_mode(os.environ.get("MOCHI_TRANSPORT"))
     if os.environ.get("MOCHI_TRANSPORT") is None:
         force = "auto"
+
+    if use_daemon and force == "auto" and daemon_enabled():
+        try:
+            return "DAEMON", send_pet_daemon(host_arg, mood, text, timeout)
+        except Exception:
+            if daemon_autostart_enabled() and start_daemon_background(host_arg):
+                try:
+                    return "DAEMON", send_pet_daemon(host_arg, mood, text, timeout)
+                except Exception:
+                    pass
 
     if force == "wifi":
         return send_pet_wifi_candidates(host_arg, mood, text, timeout, None)
@@ -434,8 +763,31 @@ def main() -> int:
     parser.add_argument("--demo", action="store_true", help="send a short status demo")
     parser.add_argument("--ping", action="store_true", help="send a small ping event")
     parser.add_argument("--hold", type=float, help="hold BLE connection for N seconds for diagnostics")
+    parser.add_argument("--daemon", action="store_true", help="run persistent local BLE bridge daemon")
+    parser.add_argument("--daemon-status", action="store_true", help="show persistent bridge daemon status")
+    parser.add_argument("--daemon-stop", action="store_true", help="stop persistent local BLE bridge daemon")
+    parser.add_argument("--no-daemon", action="store_true", help="send directly without using the local daemon")
     parser.add_argument("--timeout", type=float, default=3.0, help="BLE/HTTP timeout seconds")
     args = parser.parse_args()
+
+    if args.daemon:
+        return run_daemon(args.host)
+
+    if args.daemon_status:
+        try:
+            print(json.dumps(daemon_status(args.timeout), ensure_ascii=False))
+            return 0
+        except Exception as exc:
+            print(f"后台桥接器未运行：{exc}", file=sys.stderr)
+            return 1
+
+    if args.daemon_stop:
+        try:
+            print(json.dumps(stop_daemon(args.timeout), ensure_ascii=False))
+            return 0
+        except Exception as exc:
+            print(f"后台桥接器未运行：{exc}", file=sys.stderr)
+            return 1
 
     if args.set_host:
         save_host(args.set_host)
@@ -456,7 +808,7 @@ def main() -> int:
         if args.demo:
             run_demo(args.host, args.timeout)
             return 0
-        host, result = send_pet_auto(args.host, mood, text, args.timeout)
+        host, result = send_pet_auto(args.host, mood, text, args.timeout, use_daemon=not args.no_daemon)
     except (TimeoutError, socket.timeout, urllib.error.URLError, OSError, RuntimeError, asyncio.TimeoutError) as exc:
         print(f"发送失败：{exc}", file=sys.stderr)
         print(f"已尝试 host：{', '.join(candidate_hosts(args.host))}", file=sys.stderr)

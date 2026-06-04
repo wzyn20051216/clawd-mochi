@@ -218,6 +218,39 @@ def test_bridge(install_dir: Path, python_bin: str) -> None:
     subprocess.run([python_bin, str(event_path)], input=payload, text=True, check=True)
 
 
+def start_daemon(install_dir: Path, python_bin: str, host: str | None) -> None:
+    """启动本机常驻桥接器；hook 会打 127.0.0.1，不依赖用户电脑局域网 IP。"""
+    bridge_path = install_dir / "mochi_bridge.py"
+    if not bridge_path.exists():
+        raise FileNotFoundError(f"桥接器未安装：{bridge_path}")
+    command = [python_bin, str(bridge_path), "--daemon"]
+    if host:
+        command.extend(["--host", host])
+    log_path = install_dir / "mochi_daemon.log"
+    with log_path.open("ab") as output:
+        kwargs: dict[str, Any] = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": output,
+            "stderr": subprocess.STDOUT,
+            "cwd": str(install_dir),
+            "env": {**os.environ, "MOCHI_IN_DAEMON": "1", "MOCHI_DAEMON_AUTOSTART": "0"},
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(command, **kwargs)
+    info("Persistent local bridge daemon requested.")
+
+
+def stop_daemon(install_dir: Path, python_bin: str) -> None:
+    """停止本机常驻桥接器。"""
+    bridge_path = install_dir / "mochi_bridge.py"
+    if not bridge_path.exists():
+        return
+    subprocess.run([python_bin, str(bridge_path), "--daemon-stop"], text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def main() -> int:
     """解析命令行并执行安装动作。"""
     parser = argparse.ArgumentParser(description="Install Clawd Mochi bridge hooks for Codex / Claude Code.")
@@ -233,6 +266,7 @@ def main() -> int:
         install_bridge_files(install_dir, args.host)
         ensure_ble_dependency(args.python)
         command = install_hooks(install_dir, args.python)
+        start_daemon(install_dir, args.python, args.host)
         info("Global bridge installed.")
         info(f"Hook command: {command}")
         bridge_status(install_dir)
@@ -246,6 +280,7 @@ def main() -> int:
         info("Test event sent.")
     elif args.action == "uninstall":
         uninstall_hooks()
+        stop_daemon(install_dir, args.python)
         info("Codex / Claude global Mochi hooks removed.")
         info(f"Bridge files kept at: {install_dir}")
     return 0

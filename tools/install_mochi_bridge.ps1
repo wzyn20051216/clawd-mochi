@@ -224,6 +224,34 @@ function Test-MochiBridge {
     }
 }
 
+function Start-MochiDaemon {
+    $bridgePath = Join-Path $InstallDir "mochi_bridge.py"
+    if (-not (Test-Path -LiteralPath $bridgePath)) {
+        throw "Bridge is not installed: $bridgePath"
+    }
+    $pythonPath = (& py -3 -c "import sys; print(sys.executable)").Trim()
+    $args = @($bridgePath, "--daemon")
+    if ($MochiHost) {
+        $args += @("--host", $MochiHost)
+    }
+    $logPath = Join-Path $InstallDir "mochi_daemon.log"
+    $env:MOCHI_IN_DAEMON = "1"
+    $env:MOCHI_DAEMON_AUTOSTART = "0"
+    $quotedArgs = ($args | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join " "
+    $cmdLine = "/c `"$pythonPath`" $quotedArgs >> `"$logPath`" 2>&1"
+    Start-Process -FilePath "cmd.exe" -ArgumentList $cmdLine -WorkingDirectory $InstallDir -WindowStyle Hidden | Out-Null
+    Remove-Item Env:\MOCHI_IN_DAEMON -ErrorAction SilentlyContinue
+    Remove-Item Env:\MOCHI_DAEMON_AUTOSTART -ErrorAction SilentlyContinue
+    Write-Info "Persistent local bridge daemon requested."
+}
+
+function Stop-MochiDaemon {
+    $bridgePath = Join-Path $InstallDir "mochi_bridge.py"
+    if (Test-Path -LiteralPath $bridgePath) {
+        py -3 $bridgePath --daemon-stop *> $null
+    }
+}
+
 function Show-Status {
     $eventPath = Join-Path $InstallDir "mochi_event.py"
     $hostPath = Join-Path $InstallDir ".mochi_host"
@@ -243,6 +271,7 @@ switch ($Action) {
         Install-BridgeFiles
         Install-BleDependency
         $command = Install-GlobalHooks
+        Start-MochiDaemon
         Write-Info "Global bridge installed."
         Write-Info "Hook command: $command"
         Show-Status
@@ -260,6 +289,7 @@ switch ($Action) {
     }
     "uninstall" {
         Uninstall-GlobalHooks
+        Stop-MochiDaemon
         Write-Info "Codex / Claude global Mochi hooks removed."
         Write-Info "Bridge files kept at: $InstallDir"
     }

@@ -324,7 +324,23 @@ macOS / Linux：
 python3 tools/mochi_bridge.py --ping
 ```
 
-如果成功，屏幕会有反应。命令行返回里看到 `transport: ble` 表示当前走蓝牙；看到 `bridge_mode: wifi` 或 host 地址表示当前走 WiFi。
+如果成功，屏幕会有反应。命令行返回里看到 `transport: ble-daemon` 表示正在通过本机常驻后台走蓝牙；看到 `transport: ble` 表示短连接蓝牙；看到 `bridge_mode: wifi` 或 host 地址表示当前走 WiFi。
+
+常驻后台只监听当前电脑自己的 `127.0.0.1:27665`，不是写死某个用户的局域网 IP。每个用户电脑上的 Codex / Claude hook 都会打到自己的本机后台，后台再通过 BLE 或 WiFi 转发给 ESP32。
+
+查看常驻后台状态：
+
+Windows：
+
+```powershell
+py -3 tools\mochi_bridge.py --daemon-status
+```
+
+macOS / Linux：
+
+```bash
+python3 tools/mochi_bridge.py --daemon-status
+```
 
 如果蓝牙不可用，但 ESP32 已经连上你的正常 WiFi，可以指定网页上或屏幕上显示的地址：
 
@@ -359,11 +375,12 @@ python3 tools/install_mochi_bridge.py --host clawd-mochi.local
 - 复制桥接器到用户目录下的 `.codex/mochi-bridge`
 - 尝试安装 BLE 依赖 `bleak`
 - 保存 ESP32 地址
+- 启动本机常驻桥接器
 - 写入 Codex 全局 hook
 - 写入 Claude Code 全局 hook
 - 发送测试事件
 
-安装后，正常打开 Codex 或 Claude Code 即可。之后 AI 工作时，桌宠会自动同步状态。默认走蓝牙；只有对桌宠说“使用 WiFi”或在网页里连接 WiFi 后，才会启用局域网通道。
+安装后，正常打开 Codex 或 Claude Code 即可。之后 AI 工作时，桌宠会自动同步状态。默认走蓝牙；只有对桌宠说“使用 WiFi”或在网页里连接 WiFi 后，才会启用局域网通道。桌宠睡眠只是屏幕和表情的假睡，后台通信仍然运行；一旦 Claude/Codex 或语音事件触发，桌宠会自动醒来。
 
 ### 8.3 常用维护命令
 

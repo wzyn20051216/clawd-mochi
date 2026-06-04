@@ -267,6 +267,16 @@ py -3 tools\mochi_bridge.py --ping
 py -3 tools\mochi_bridge.py --demo
 ```
 
+默认情况下，`mochi_bridge.py` 会优先使用本机常驻后台桥接器。后台只监听当前电脑自己的 `127.0.0.1:27665`，不是写死某个用户的局域网 IP；每个用户电脑上的 hook 都会打到自己的本机后台。后台会长期保持 BLE 连接，并在断线后自动重连：
+
+```powershell
+py -3 tools\mochi_bridge.py --daemon-status
+py -3 tools\mochi_bridge.py --daemon-stop
+py -3 tools\mochi_bridge.py --daemon
+```
+
+返回里看到 `transport: ble-daemon` 表示状态事件已通过常驻后台发送。ESP32 的睡眠只是屏幕和表情的假睡，后台仍然运行；一旦 Claude/Codex 或语音事件触发，桌宠会自动醒来。
+
 保存后常用状态可以直接发送：
 
 ```powershell
@@ -321,6 +331,7 @@ sh tools/install_mochi_bridge.sh --host clawd-mochi.local
 复制桥接器到用户目录下的 .codex/mochi-bridge
 尽量安装 BLE 依赖 bleak
 保存 ESP32 Host
+启动本机常驻桥接器
 写入 Codex 全局 hook
 写入 Claude Code 全局 hook
 发送测试事件
