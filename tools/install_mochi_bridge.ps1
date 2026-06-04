@@ -158,7 +158,7 @@ function Install-BleDependency {
     if ($LASTEXITCODE -eq 0) {
         Write-Info "BLE dependency: bleak installed."
     } else {
-        Write-Info "BLE dependency: install failed, WiFi bridge still works."
+        Write-Info "BLE dependency: install failed; WiFi bridge still works after switching Mochi to WiFi mode."
     }
 }
 

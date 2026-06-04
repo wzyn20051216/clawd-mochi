@@ -354,10 +354,10 @@ def send_pet_wifi_candidates(host_arg: str | None,
         try:
             state = read_state_http(host, min(timeout, 1.2))
             mode = normalize_bridge_mode(str(state.get("bridge_mode") or "auto"))
-            if mode == "ble":
+            if mode != "wifi":
                 if last_ble_error:
                     raise last_ble_error
-                raise TimeoutError("device bridge mode is BLE")
+                raise TimeoutError(f"device bridge mode is {mode}")
             result = send_pet(host, mood, text, timeout)
             if isinstance(result, dict):
                 result.setdefault("bridge_mode", mode)
@@ -419,7 +419,7 @@ def main() -> int:
     except (TimeoutError, socket.timeout, urllib.error.URLError, OSError, RuntimeError, asyncio.TimeoutError) as exc:
         print(f"发送失败：{exc}", file=sys.stderr)
         print(f"已尝试 host：{', '.join(candidate_hosts(args.host))}", file=sys.stderr)
-        print("请确认 ESP32 已开机、电脑蓝牙已打开；若走 WiFi 备用通道，请确认电脑和 ESP32 在同一局域网，或连接热点 ClaWD-Mochi 后访问 http://192.168.4.1。", file=sys.stderr)
+        print("请确认 ESP32 已开机、电脑蓝牙已打开；若要走 WiFi 通道，请先对桌宠说“使用 WiFi”，并确认电脑和 ESP32 在同一局域网。配网可连接热点 ClaWD-Mochi 后访问 http://192.168.4.1。", file=sys.stderr)
         return 1
 
     print(json.dumps(result, ensure_ascii=False))

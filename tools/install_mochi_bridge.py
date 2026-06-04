@@ -141,7 +141,7 @@ def install_bridge_files(install_dir: Path, host: str | None) -> None:
 
 
 def ensure_ble_dependency(python_bin: str) -> bool:
-    """尽量安装 bleak，让桥接器可优先使用 BLE；失败时仍可走 WiFi。"""
+    """尽量安装 bleak，让桥接器可优先使用 BLE；失败时可切到 WiFi 模式。"""
     check = subprocess.run(
         [python_bin, "-c", "import bleak"],
         text=True,
@@ -160,7 +160,7 @@ def ensure_ble_dependency(python_bin: str) -> bool:
     if install.returncode == 0:
         info("BLE dependency: bleak installed.")
         return True
-    info("BLE dependency: install failed, WiFi bridge still works.")
+    info("BLE dependency: install failed; WiFi bridge still works after switching Mochi to WiFi mode.")
     return False
 
 

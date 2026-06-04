@@ -15,7 +15,7 @@
 ## 当前功能
 
 - ESP32-S3 AP+STA 双模式：保留热点 `ClaWD-Mochi`，也可连接你的正常 WiFi
-- BLE 蓝牙桥接：电脑端桥接器优先用蓝牙发送 Claude/Codex 状态，WiFi 自动备用
+- BLE 蓝牙桥接：电脑端桥接器默认用蓝牙发送 Claude/Codex 状态，语音切到 WiFi 后才走局域网
 - 浏览器控制页面：热点模式 `http://192.168.4.1`，局域网模式优先使用 `http://clawd-mochi.local`
 - ST7735 128x160 与 ST7789 240x240 双驱动保留
 - normal eyes / squish eyes / Claude Code / canvas 绘图模式
@@ -239,13 +239,13 @@ py -3 tools\mochi_bridge.py error "build failed" --host clawd-mochi.local
 
 桥接器默认按桌宠当前桥接模式工作：
 
-- `auto`：BLE 蓝牙优先，蓝牙不可用时回退 WiFi HTTP
+- `auto`：BLE 蓝牙优先，不主动连接保存的 WiFi
 - `ble`：只走 BLE，电脑和 ESP32 不需要同一个 WiFi
-- `wifi`：只走 WiFi HTTP，需要电脑和 ESP32 在同一个局域网
+- `wifi`：只走 WiFi HTTP，并开始连接保存的 WiFi；需要电脑和 ESP32 在同一个局域网
 
-用户可以直接对语音模块说“自动桥接”“使用蓝牙”“使用 WiFi”来切换模式。切换后会保存到 ESP32 的 NVS，掉电不丢。BLE 已可用时，后台 WiFi 失败不会再抢屏幕或播报“连接失败”。
+用户可以直接对语音模块说“自动桥接”“使用蓝牙”“使用 WiFi”来切换模式。切换后会保存到 ESP32 的 NVS，掉电不丢。只要没有明确切到“使用 WiFi”，固件不会后台连接保存的 WiFi，也不会因为 WiFi 失败打断蓝牙或播报“连接失败”。
 
-开发调试时也可以临时禁用 BLE，只走 WiFi：
+开发调试时也可以临时禁用 BLE，只走 WiFi。执行前先对桌宠说“使用 WiFi”，并确认 ESP32 已拿到局域网 IP：
 
 ```powershell
 $env:MOCHI_BLE="0"

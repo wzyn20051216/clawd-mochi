@@ -62,6 +62,7 @@ constexpr const char *kNvsNamespace = "mochi";
 constexpr uint32_t kAutoSleepTimeoutMs = 10 * 60 * 1000;
 constexpr uint8_t kSleepBrightness = 10;
 constexpr uint8_t kDefaultBrightness = 80;
+constexpr uint32_t kWifiRetryIntervalMs = 10 * 1000;
 constexpr uint16_t kVoiceSayWifiOk = 0xFF81;
 constexpr uint16_t kVoiceSayWifiFail = 0xFF82;
 constexpr uint16_t kVoiceSayDone = 0xFF83;
@@ -467,6 +468,9 @@ void set_background_rgb(uint32_t rgb);
 void draw_sleepy_eyes(uint8_t z_phase);
 void anim_wake_up();
 std::string sta_ip_text();
+bool sta_connect_allowed();
+bool sta_credentials_available();
+esp_err_t apply_sta_wifi_config();
 void task_restore_normal_face_once(void *);
 void handle_pet_status(const std::string &mood, const std::string &text);
 
@@ -1212,6 +1216,21 @@ void show_wifi_retry_later_feedback(bool force = false)
 void set_bridge_mode(BridgeMode mode, bool announce)
 {
     g_bridge_mode = mode;
+    g_sta_retry_count = 0;
+    if (mode == kBridgeModeWifi) {
+        if (sta_credentials_available()) {
+            g_sta_manual_pause = false;
+            g_sta_disabled = false;
+            g_sta_connected = false;
+            g_sta_ip.addr = 0;
+            ESP_ERROR_CHECK_WITHOUT_ABORT(apply_sta_wifi_config());
+            ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
+        }
+    } else {
+        g_sta_connected = false;
+        g_sta_ip.addr = 0;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_disconnect());
+    }
     save_settings();
     if (!announce) {
         return;
@@ -1709,6 +1728,17 @@ bool sta_configured()
     return !g_sta_ssid.empty() || std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0;
 }
 
+/**
+ * @brief 判断 STA 是否允许主动连接外部 WiFi。
+ *
+ * 默认蓝牙/自动桥接只保留 SoftAP 配网入口，不再后台连接保存的 WiFi；
+ * 用户通过语音或网页切到 WiFi 桥接后才允许 STA 自动连接和重试。
+ */
+bool sta_connect_allowed()
+{
+    return g_bridge_mode == kBridgeModeWifi && sta_configured();
+}
+
 bool sta_credentials_available()
 {
     return !g_sta_ssid.empty() || std::strlen(CONFIG_MOCHI_WIFI_STA_SSID) > 0;
@@ -2176,6 +2206,8 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
     }
     g_sta_manual_pause = false;
     g_sta_disabled = false;
+    g_bridge_mode = kBridgeModeWifi;
+    save_settings();
     g_sta_connected = false;
     g_sta_ip.addr = 0;
     g_sta_last_disconnect_reason = 0;
@@ -2544,7 +2576,7 @@ esp_err_t start_http_server()
 void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        if (sta_configured()) {
+        if (sta_connect_allowed()) {
             esp_wifi_connect();
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -2552,7 +2584,11 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
         g_sta_connected = false;
         g_sta_ip.addr = 0;
         g_sta_last_disconnect_reason = event ? event->reason : 0;
-        if (sta_configured()) {
+        if (!sta_connect_allowed()) {
+            g_sta_retry_count = 0;
+            ESP_LOGI(kTag, "station disconnected quietly: bridge_mode=%s reason=%u",
+                     bridge_mode_text(g_bridge_mode), g_sta_last_disconnect_reason);
+        } else {
             ++g_sta_retry_count;
             if (g_sta_retry_count >= 3) {
                 ESP_LOGW(kTag, "station disconnected, reason=%u, wait for 10s retry", g_sta_last_disconnect_reason);
@@ -2582,8 +2618,8 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
 void task_wifi_reconnect(void *)
 {
     while (true) {
-        delay_ms(10000);
-        if (!g_sta_connected && sta_configured() && g_sta_retry_count >= 3) {
+        delay_ms(kWifiRetryIntervalMs);
+        if (!g_sta_connected && sta_connect_allowed() && g_sta_retry_count >= 3) {
             ESP_LOGI(kTag, "periodic station retry: ssid=%s", sta_ssid().c_str());
             ESP_ERROR_CHECK_WITHOUT_ABORT(apply_sta_wifi_config());
             ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
@@ -2617,15 +2653,17 @@ esp_err_t wifi_init_apsta()
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), kTag, "wifi mode failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_config), kTag, "ap config failed");
 
-    if (sta_configured()) {
+    if (sta_connect_allowed()) {
         ESP_RETURN_ON_ERROR(apply_sta_wifi_config(), kTag, "sta config failed");
     }
 
     ESP_RETURN_ON_ERROR(esp_wifi_start(), kTag, "wifi start failed");
     ESP_LOGI(kTag, "softAP started: ssid=%s password=%s ip=192.168.4.1",
              CONFIG_MOCHI_WIFI_AP_SSID, CONFIG_MOCHI_WIFI_AP_PASSWORD);
-    if (sta_configured()) {
+    if (sta_connect_allowed()) {
         ESP_LOGI(kTag, "station connecting: ssid=%s", sta_ssid().c_str());
+    } else if (sta_credentials_available()) {
+        ESP_LOGI(kTag, "station saved but paused by bridge mode: %s", bridge_mode_text(g_bridge_mode));
     } else {
         ESP_LOGI(kTag, "station disabled; configure WiFi from web page");
     }
@@ -2700,10 +2738,10 @@ extern "C" void app_main(void)
     note_activity();
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);
     xTaskCreate(task_wifi_reconnect, "wifi_retry", 3072, nullptr, 3, nullptr);
-    for (uint8_t i = 0; i < 20 && sta_configured() && !g_sta_connected; ++i) {
+    for (uint8_t i = 0; i < 20 && sta_connect_allowed() && !g_sta_connected; ++i) {
         delay_ms(250);
     }
-    const bool startup_wifi_failed = sta_configured() && !g_sta_connected && !bridge_available();
+    const bool startup_wifi_failed = sta_connect_allowed() && !g_sta_connected && !bridge_available();
     draw_wifi_info();
     if (startup_wifi_failed) {
         show_wifi_retry_later_feedback(true);
