@@ -56,6 +56,16 @@ SPEAK_EVENT_TEXT = {
 }
 
 
+def log_hook(message: str) -> None:
+    """写入轻量 hook 日志，便于判断全局 hook 是否触发。"""
+    try:
+        path = Path(__file__).with_name("mochi_hook.log")
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
+    except OSError:
+        pass
+
+
 def read_event() -> dict[str, Any]:
     """读取 hook stdin；没有输入时返回空事件，便于手动测试。"""
     raw = sys.stdin.read().strip()
@@ -234,7 +244,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Bridge Codex/Claude hook events to Clawd Mochi.")
     parser.add_argument("--host", help="ESP32 address, default: saved host or 192.168.4.1")
     parser.add_argument("--event", help="manual event name for testing")
-    parser.add_argument("--timeout", type=float, default=1.5, help="HTTP timeout seconds")
+    parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout seconds")
     args = parser.parse_args()
 
     data = read_event()
@@ -242,9 +252,12 @@ def main() -> int:
         data["hook_event_name"] = args.event
 
     mood, text = map_event(data)
+    event = str(data.get("hook_event_name") or data.get("event") or "manual")
     try:
-        send_pet_auto(args.host, mood, text, args.timeout)
-    except (TimeoutError, socket.timeout, urllib.error.URLError, OSError):
+        host, _ = send_pet_auto(args.host, mood, text, args.timeout)
+        log_hook(f"{event}: pet {mood} {text} -> {host}")
+    except (TimeoutError, socket.timeout, urllib.error.URLError, OSError) as exc:
+        log_hook(f"{event}: pet failed {mood} {text}: {exc}")
         pass
     speak_hook_event(args.host, data, args.timeout)
 

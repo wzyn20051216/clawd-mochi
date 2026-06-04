@@ -148,7 +148,7 @@ function Install-BridgeFiles {
 
 function Install-GlobalHooks {
     $eventPath = (Join-Path $InstallDir "mochi_event.py").Replace("\", "/")
-    $command = "py -3 `"$eventPath`""
+    $command = "py -3 `"$eventPath`" --timeout 5"
     $newHooks = New-MochiHooks -Command $command
 
     New-Item -ItemType Directory -Force -Path $CodexHome | Out-Null
