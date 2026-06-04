@@ -1,19 +1,24 @@
 #include "audio.hpp"
 
+#include "esp_log.h"
+#include "sdkconfig.h"
+
+#if CONFIG_MOCHI_AUDIO_ENABLE
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 
 #include "driver/i2s_std.h"
 #include "esp_check.h"
-#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "sdkconfig.h"
+#endif
 
 namespace {
 
 constexpr const char *kTag = "mochi_audio";
+
+#if CONFIG_MOCHI_AUDIO_ENABLE
 constexpr uint32_t kSampleRate = 16000;
 constexpr float kPi = 3.14159265358979323846f;
 
@@ -25,6 +30,7 @@ int16_t clamp_i16(float value)
     const float clipped = std::clamp(value, -32768.0f, 32767.0f);
     return static_cast<int16_t>(clipped);
 }
+#endif
 
 } // namespace
 

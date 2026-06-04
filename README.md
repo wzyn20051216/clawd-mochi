@@ -87,13 +87,13 @@ py -3 tools\mochi_audio.py --list-voices
 py -3 tools\mochi_audio.py --say "Build complete." --voice "Microsoft Zira Desktop"
 ```
 
-如果要让 Codex / Claude hook 做轻量语音播报，设置环境变量后重新打开终端：
+如果还想启用早期 Windows TTS + I2S 功放路线，需要在 `menuconfig` 打开 `Enable I2S speaker output`，并设置旧版 TTS 环境变量后重新打开终端：
 
 ```powershell
-$env:MOCHI_SPEAK="1"
+$env:MOCHI_TTS_LEGACY="1"
 ```
 
-启用后，`tools\codex_mochi.cmd` 和 `tools\claude_mochi.cmd` 会在任务完成时朗读最终回复。全局 hook 也会在能读取 transcript 的情况下朗读最后一条 assistant 回复，否则只播报简短状态。
+启用后，`tools\codex_mochi.cmd` 和 `tools\claude_mochi.cmd` 才会尝试用 Windows 本地 TTS 合成语音并推送到 ESP32 的 I2S 输出。当前默认路线是离线语音模块播固定语音，不需要这个环境变量。
 
 可选指定语音：
 

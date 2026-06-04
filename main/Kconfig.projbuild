@@ -77,7 +77,7 @@ menu "Clawd Mochi"
 
         config MOCHI_AUDIO_ENABLE
             bool "Enable I2S speaker output"
-            default y
+            default n
 
         config MOCHI_AUDIO_PIN_BCLK
             int "I2S speaker BCLK GPIO"

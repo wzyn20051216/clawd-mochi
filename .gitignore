@@ -10,4 +10,7 @@ dependencies.lock
 *.bak
 __pycache__/
 tools/.mochi_host
+tools/transcripts/
+tools/voice_clips/
+docs/~$*.xlsx
 .spec-workflow/
