@@ -388,6 +388,8 @@ void load_settings()
 
 void set_brightness(uint8_t percent);
 void set_background_rgb(uint32_t rgb);
+void draw_sleepy_eyes(uint8_t z_phase);
+void anim_wake_up();
 void task_restore_normal_face_once(void *);
 
 void apply_default_settings()
@@ -514,13 +516,47 @@ void set_brightness(uint8_t percent)
     g_display.setBacklightBrightness(g_backlight_brightness);
 }
 
+/**
+ * @brief 进入桌宠休眠状态：降低背光并绘制闭眼睡眠表情。
+ */
+void enter_sleep_state()
+{
+    if (!g_sleeping && g_backlight_brightness != kSleepBrightness) {
+        g_awake_brightness = g_backlight_brightness;
+    }
+    g_sleeping = true;
+    g_current_face = kFaceSleepy;
+    g_current_view = kViewEyesNormal;
+    g_term_mode = false;
+    g_backlight_on = true;
+    g_display.setBacklight(true);
+    g_display.setBacklightBrightness(kSleepBrightness);
+    g_backlight_brightness = kSleepBrightness;
+    draw_sleepy_eyes(0);
+}
+
+/**
+ * @brief 如果当前处于休眠，恢复背光并播放醒来动画。
+ */
+void wake_from_sleep_if_needed()
+{
+    if (!g_sleeping) {
+        return;
+    }
+    g_sleeping = false;
+    g_backlight_on = true;
+    g_display.setBacklight(true);
+    g_display.setBacklightBrightness(g_awake_brightness);
+    g_backlight_brightness = g_awake_brightness;
+    g_current_view = kViewEyesNormal;
+    g_term_mode = false;
+    anim_wake_up();
+}
+
 void note_activity()
 {
     g_last_activity_ms = tick_ms();
-    if (g_sleeping) {
-        g_sleeping = false;
-        set_brightness(g_awake_brightness);
-    }
+    wake_from_sleep_if_needed();
 }
 
 void set_background_rgb(uint32_t rgb)
@@ -907,9 +943,7 @@ void process_voice_module_code(uint16_t code)
         break;
     case 0x0003:
         draw_voice_notice(kFaceSleepy, "Sleep");
-        g_sleeping = true;
-        g_display.setBacklightBrightness(kSleepBrightness);
-        g_backlight_brightness = kSleepBrightness;
+        enter_sleep_state();
         voice_say(kVoiceSaySleep, 0);
         break;
     case 0x026F:
@@ -1452,9 +1486,7 @@ void task_auto_sleep(void *)
         }
         const uint32_t now = tick_ms();
         if (static_cast<int32_t>(now - g_last_activity_ms) >= static_cast<int32_t>(kAutoSleepTimeoutMs)) {
-            g_sleeping = true;
-            g_display.setBacklightBrightness(kSleepBrightness);
-            g_backlight_brightness = kSleepBrightness;
+            enter_sleep_state();
             voice_say(kVoiceSaySleep, 0);
         }
     }
@@ -1559,7 +1591,7 @@ void task_idle_face(void *)
 void task_restore_normal_face_once(void *)
 {
     delay_ms(3000);
-    if (!g_term_mode && g_current_view != kViewCode && g_current_view != kViewDraw) {
+    if (!g_sleeping && !g_term_mode && g_current_view != kViewCode && g_current_view != kViewDraw) {
         g_current_view = kViewEyesNormal;
         draw_face(kFaceNormal);
     }
