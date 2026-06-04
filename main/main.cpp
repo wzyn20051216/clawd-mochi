@@ -7,6 +7,7 @@
 
 #include "audio.hpp"
 #include "display.hpp"
+#include "voice_module.hpp"
 
 #include "esp_check.h"
 #include "esp_event.h"
@@ -195,7 +196,7 @@ function randomColor(){closeCanvas(false);req('/random?what=color').then(()=>ref
 function night(){closeCanvas(false);req('/night').then(()=>refresh())}
 function day(){closeCanvas(false);req('/day').then(()=>refresh())}
 function factoryReset(){closeCanvas(false);if(confirm('恢复默认设置？'))req('/factory').then(()=>refresh())}
-function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\nWiFi状态: '+(j.reason||'正常')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
+function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\n语音模块: '+(j.voice_ready?'已连接':(j.voice_enabled?'等待串口':'未启用'))+'\\n语音命令: '+(j.voice_code||'0x0000')+'\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\nWiFi状态: '+(j.reason||'正常')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
 function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function scanWifi(){const n=document.getElementById('nets');n.innerHTML='<option>扫描中...</option>';fetch('/wifi/scan',{cache:'no-store'}).then(r=>r.json()).then(j=>{n.innerHTML='';(j.nets||[]).forEach(x=>{const o=document.createElement('option');o.value=x.ssid;o.textContent=x.ssid+' ('+x.rssi+'dBm)';n.appendChild(o)});if(!n.options.length)n.innerHTML='<option value="">没扫到</option>'})}
 function msg(t){const s=document.getElementById('wifiMsg');s.classList.add('on');s.innerHTML=t}
@@ -371,6 +372,7 @@ void load_settings()
 
 void set_brightness(uint8_t percent);
 void set_background_rgb(uint32_t rgb);
+void task_restore_normal_face_once(void *);
 
 void apply_default_settings()
 {
@@ -821,6 +823,121 @@ void draw_pet_notice(Face face, const std::string &text)
         g_display.setCursor(6, y + 7);
         g_display.print(line);
         g_display.flush();
+    }
+}
+
+void schedule_restore_normal()
+{
+    g_busy = true;
+    if (xTaskCreate(task_restore_normal_face_once, "restore_face", 3072, nullptr, 4, nullptr) != pdPASS) {
+        draw_face(kFaceNormal);
+        g_busy = false;
+    }
+}
+
+void draw_voice_notice(Face face, const std::string &text)
+{
+    note_activity();
+    mark_manual_animation();
+    g_busy = true;
+    draw_pet_notice(face, text);
+    schedule_restore_normal();
+}
+
+void set_voice_brightness_delta(int delta)
+{
+    const int next = std::clamp<int>(static_cast<int>(g_awake_brightness) + delta, 5, 100);
+    set_brightness(static_cast<uint8_t>(next));
+    save_settings();
+}
+
+void handle_voice_module_code(uint16_t code, void *)
+{
+    ESP_LOGI(kTag, "voice command code=0x%04X", code);
+    switch (code) {
+    case 0xFF58:
+        draw_voice_notice(kFaceHappy, "Voice ready");
+        break;
+    case 0x0100:
+    case 0x0300:
+        draw_voice_notice(kFaceHappy, "Hello");
+        break;
+    case 0x0200:
+    case 0x0003:
+        draw_voice_notice(kFaceSleepy, "Sleep");
+        g_sleeping = true;
+        g_display.setBacklightBrightness(kSleepBrightness);
+        g_backlight_brightness = kSleepBrightness;
+        break;
+    case 0x026F:
+        draw_voice_notice(kFaceSleepy, "Rest");
+        break;
+    case 0x0400:
+    case 0x0027:
+        set_voice_brightness_delta(10);
+        draw_voice_notice(kFaceHappy, "Bright +");
+        break;
+    case 0x0500:
+    case 0x0028:
+        set_voice_brightness_delta(-10);
+        draw_voice_notice(kFaceSleepy, "Bright -");
+        break;
+    case 0x0600:
+        set_brightness(100);
+        save_settings();
+        draw_voice_notice(kFaceHappy, "Bright max");
+        break;
+    case 0x0700:
+        set_brightness(55);
+        save_settings();
+        draw_voice_notice(kFaceNormal, "Bright mid");
+        break;
+    case 0x0800:
+        set_brightness(10);
+        save_settings();
+        draw_voice_notice(kFaceSleepy, "Bright min");
+        break;
+    case 0x0900:
+        draw_voice_notice(kFaceHappy, "Voice on");
+        break;
+    case 0x0A00:
+        draw_voice_notice(kFaceNormal, "Voice off");
+        break;
+    case 0x0001:
+    case 0x0002:
+        draw_voice_notice(kFaceNormal, "Stop");
+        break;
+    case 0x0004:
+        draw_voice_notice(kFaceHappy, "Forward");
+        break;
+    case 0x0005:
+        draw_voice_notice(kFaceSurprise, "Back");
+        break;
+    case 0x0006:
+    case 0x0029:
+        draw_voice_notice(kFaceLook, "Left");
+        break;
+    case 0x0007:
+    case 0x002A:
+        draw_voice_notice(kFaceLook, "Right");
+        break;
+    case 0x002B:
+        draw_voice_notice(kFaceLove, "Hold");
+        break;
+    case 0x002C:
+        draw_voice_notice(kFaceWink, "Release");
+        break;
+    case 0x0034:
+        g_idle_activity = 3;
+        save_settings();
+        draw_voice_notice(kFaceLove, "Dance");
+        break;
+    default: {
+        char text[20] = {};
+        std::snprintf(text, sizeof(text), "Voice %04X", static_cast<unsigned>(code));
+        draw_voice_notice(kFaceSurprise, text);
+        break;
+    }
     }
 }
 
@@ -1797,9 +1914,12 @@ esp_err_t route_factory(httpd_req_t *req)
 
 esp_err_t route_state(httpd_req_t *req)
 {
-    char json[608];
+    const VoiceModuleStatus voice = voice_module_get_status();
+    char voice_code[7] = {};
+    std::snprintf(voice_code, sizeof(voice_code), "0x%04X", static_cast<unsigned>(voice.last_code));
+    char json[768];
     std::snprintf(json, sizeof(json),
-                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"audio\":%s,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"mdns\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"audio\":%s,\"voice_enabled\":%s,\"voice_ready\":%s,\"voice_code\":\"%s\",\"voice_frames\":%u,\"voice_bad\":%u,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"mdns\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
                   static_cast<unsigned>(g_current_view),
                   static_cast<unsigned>(g_current_face),
                   g_busy ? "true" : "false",
@@ -1807,6 +1927,11 @@ esp_err_t route_state(httpd_req_t *req)
                   g_backlight_on ? "true" : "false",
                   g_sleeping ? "true" : "false",
                   audio_is_ready() ? "true" : "false",
+                  voice.enabled ? "true" : "false",
+                  voice.ready ? "true" : "false",
+                  voice_code,
+                  static_cast<unsigned>(voice.frame_count),
+                  static_cast<unsigned>(voice.bad_frame_count),
                   static_cast<unsigned>(g_anim_speed),
                   static_cast<unsigned>(g_idle_activity),
                   static_cast<unsigned>(g_backlight_brightness),
@@ -2038,6 +2163,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(wifi_init_apsta());
     ESP_ERROR_CHECK(start_mdns_service());
     ESP_ERROR_CHECK(start_http_server());
+    ESP_ERROR_CHECK_WITHOUT_ABORT(voice_module_init(handle_voice_module_code, nullptr));
     note_activity();
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);
     xTaskCreate(task_wifi_reconnect, "wifi_retry", 3072, nullptr, 3, nullptr);

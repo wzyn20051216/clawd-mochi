@@ -96,4 +96,45 @@ menu "Clawd Mochi"
 
     endmenu
 
+    menu "Voice Module"
+
+        config MOCHI_VOICE_MODULE_ENABLE
+            bool "Enable CI1302/Yahboom UART voice module"
+            default y
+
+        config MOCHI_VOICE_MODULE_UART_PORT
+            int "Voice module UART port"
+            depends on MOCHI_VOICE_MODULE_ENABLE
+            default 1
+            range 1 2
+            help
+                UART0 is reserved for ESP-IDF logs and flashing. Use UART1 or UART2.
+
+        config MOCHI_VOICE_MODULE_BAUDRATE
+            int "Voice module UART baudrate"
+            depends on MOCHI_VOICE_MODULE_ENABLE
+            default 115200
+
+        config MOCHI_VOICE_MODULE_RX_GPIO
+            int "ESP32 RX GPIO connected to voice module TX"
+            depends on MOCHI_VOICE_MODULE_ENABLE
+            default 18
+
+        config MOCHI_VOICE_MODULE_TX_GPIO
+            int "ESP32 TX GPIO connected to voice module RX"
+            depends on MOCHI_VOICE_MODULE_ENABLE
+            default 21
+
+        config MOCHI_VOICE_MODULE_TASK_STACK
+            int "Voice module task stack size"
+            depends on MOCHI_VOICE_MODULE_ENABLE
+            default 3072
+
+        config MOCHI_VOICE_MODULE_TASK_PRIO
+            int "Voice module task priority"
+            depends on MOCHI_VOICE_MODULE_ENABLE
+            default 5
+
+    endmenu
+
 endmenu

@@ -3,6 +3,7 @@ idf_component_register(
         "audio.cpp"
         "display.cpp"
         "main.cpp"
+        "voice_module.cpp"
     INCLUDE_DIRS
         "."
     REQUIRES
