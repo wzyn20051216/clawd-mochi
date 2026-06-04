@@ -177,7 +177,7 @@ sh uninstall_linux.sh
 
 安装成功后，正常打开 Codex 或 Claude Code 即可。AI 开始思考、调用工具、完成任务或报错时，桌宠会自动变化表情并触发语音模块播报。
 
-桥接器默认优先使用 BLE 蓝牙；蓝牙不可用时自动回退到 WiFi HTTP。临时禁用蓝牙可设置环境变量 `MOCHI_BLE=0`。
+桥接器会读取桌宠当前桥接模式：自动桥接为 BLE 蓝牙优先、WiFi 备用；“使用蓝牙”为只走 BLE；“使用 WiFi”为只走 WiFi。用户可直接对桌宠说“自动桥接”“使用蓝牙”“使用 WiFi”来切换。
 
 本桥接器只在本机写入 Codex / Claude Code 的 hook 配置，并向 ESP32 发送状态事件；不会读取或保存 Claude、Codex、OpenAI、Anthropic 的账号密钥。
 """

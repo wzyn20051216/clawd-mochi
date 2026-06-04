@@ -75,6 +75,15 @@ constexpr uint16_t kVoiceSayNight = 0xFF8A;
 constexpr uint16_t kVoiceSayDay = 0xFF8B;
 constexpr uint16_t kVoiceSayScreenOff = 0xFF8C;
 constexpr uint16_t kVoiceSayScreenOn = 0xFF8D;
+constexpr uint16_t kVoiceSayBridgeAuto = 0xFF8E;
+constexpr uint16_t kVoiceSayBridgeBle = 0xFF8F;
+constexpr uint16_t kVoiceSayBridgeWifi = 0xFF90;
+
+enum BridgeMode : uint8_t {
+    kBridgeModeAuto = 0,
+    kBridgeModeBle = 1,
+    kBridgeModeWifi = 2,
+};
 
 enum View : uint8_t {
     kViewEyesNormal = 0,
@@ -136,6 +145,7 @@ bool g_sta_disabled = false;
 bool g_sta_manual_pause = false;
 uint8_t g_sta_last_disconnect_reason = 0;
 uint8_t g_sta_retry_count = 0;
+BridgeMode g_bridge_mode = kBridgeModeAuto;
 std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
@@ -252,7 +262,7 @@ function randomColor(){closeCanvas(false);req('/random?what=color').then(()=>ref
 function night(){closeCanvas(false);req('/night').then(()=>refresh())}
 function day(){closeCanvas(false);req('/day').then(()=>refresh())}
 function factoryReset(){closeCanvas(false);if(confirm('恢复默认设置？'))req('/factory').then(()=>refresh())}
-function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\n蓝牙桥接: '+(j.ble_ready?'已开启':'未开启')+'\\n语音模块: '+(j.voice_ready?'已连接':(j.voice_enabled?'等待串口':'未启用'))+'\\n语音命令: '+(j.voice_code||'0x0000')+'\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\nWiFi状态: '+(j.reason||'正常')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
+function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\n桥接模式: '+(j.bridge_mode||'auto')+'\\n蓝牙桥接: '+(j.ble_ready?'已开启':'未开启')+'\\n语音模块: '+(j.voice_ready?'已连接':(j.voice_enabled?'等待串口':'未启用'))+'\\n语音命令: '+(j.voice_code||'0x0000')+'\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\nWiFi状态: '+(j.reason||'正常')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
 function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function scanWifi(){const n=document.getElementById('nets');n.innerHTML='<option>扫描中...</option>';fetch('/wifi/scan',{cache:'no-store'}).then(r=>r.json()).then(j=>{n.innerHTML='';(j.nets||[]).forEach(x=>{const o=document.createElement('option');o.value=x.ssid;o.textContent=x.ssid+' ('+x.rssi+'dBm)';n.appendChild(o)});if(!n.options.length)n.innerHTML='<option value="">没扫到</option>'})}
 function msg(t){const s=document.getElementById('wifiMsg');s.classList.add('on');s.innerHTML=t}
@@ -340,6 +350,29 @@ std::string rgb888_to_hex(uint32_t rgb)
     return text;
 }
 
+BridgeMode clamp_bridge_mode(uint8_t mode)
+{
+    return mode <= static_cast<uint8_t>(kBridgeModeWifi) ? static_cast<BridgeMode>(mode) : kBridgeModeAuto;
+}
+
+const char *bridge_mode_text(BridgeMode mode)
+{
+    switch (mode) {
+    case kBridgeModeBle:
+        return "ble";
+    case kBridgeModeWifi:
+        return "wifi";
+    case kBridgeModeAuto:
+    default:
+        return "auto";
+    }
+}
+
+bool bridge_available()
+{
+    return ble_bridge_is_ready() || g_sta_connected;
+}
+
 uint16_t hex_to_rgb565(std::string hex)
 {
     if (!hex.empty() && hex[0] == '#') {
@@ -382,6 +415,7 @@ void save_settings()
     }
     nvs_set_u32(handle, "bg", g_bg_rgb);
     nvs_set_u8(handle, "bright", g_awake_brightness);
+    nvs_set_u8(handle, "bridge", static_cast<uint8_t>(g_bridge_mode));
     if (!g_sta_ssid.empty()) {
         nvs_set_str(handle, "sta_ssid", g_sta_ssid.c_str());
         nvs_set_str(handle, "sta_pwd", g_sta_password.c_str());
@@ -399,6 +433,7 @@ void load_settings()
     }
     uint32_t bg = kDefaultBgRgb;
     uint8_t bright = kDefaultBrightness;
+    uint8_t bridge = static_cast<uint8_t>(kBridgeModeAuto);
     uint8_t sta_disabled = 0;
     char sta_ssid[33] = {};
     char sta_pwd[65] = {};
@@ -406,6 +441,7 @@ void load_settings()
     size_t sta_pwd_len = sizeof(sta_pwd);
     nvs_get_u32(handle, "bg", &bg);
     nvs_get_u8(handle, "bright", &bright);
+    nvs_get_u8(handle, "bridge", &bridge);
     nvs_get_u8(handle, "sta_disabled", &sta_disabled);
     nvs_get_str(handle, "sta_ssid", sta_ssid, &sta_ssid_len);
     nvs_get_str(handle, "sta_pwd", sta_pwd, &sta_pwd_len);
@@ -420,6 +456,7 @@ void load_settings()
     g_idle_activity = 2;
     g_backlight_brightness = std::clamp<uint8_t>(bright, 5, 100);
     g_awake_brightness = g_backlight_brightness;
+    g_bridge_mode = clamp_bridge_mode(bridge);
     g_sta_ssid = sta_ssid;
     g_sta_password = sta_pwd;
     g_sta_disabled = sta_disabled != 0;
@@ -441,6 +478,7 @@ void apply_default_settings()
     g_anim_speed = 2;
     g_idle_activity = 2;
     g_awake_brightness = kDefaultBrightness;
+    g_bridge_mode = kBridgeModeAuto;
     set_brightness(kDefaultBrightness);
     g_term_mode = false;
     g_sleeping = false;
@@ -1118,11 +1156,20 @@ void handle_ble_pet_event(const BlePetEvent &pet, void *)
     }
 }
 
+const char *current_ble_bridge_mode(void *)
+{
+    return bridge_mode_text(g_bridge_mode);
+}
+
 /**
  * @brief 显示并播报 WiFi 重连成功，避免网页连接和 IP 事件重复触发。
  */
 void show_wifi_connected_feedback()
 {
+    if (g_bridge_mode != kBridgeModeWifi && ble_bridge_is_ready()) {
+        ESP_LOGI(kTag, "wifi connected quietly because BLE bridge is available");
+        return;
+    }
     const uint32_t now = tick_ms();
     if (g_last_wifi_ok_feedback_ms != 0 &&
         static_cast<int32_t>(now - g_last_wifi_ok_feedback_ms) < 2000) {
@@ -1144,6 +1191,10 @@ void show_wifi_connected_feedback()
  */
 void show_wifi_retry_later_feedback(bool force = false)
 {
+    if (g_bridge_mode != kBridgeModeWifi && ble_bridge_is_ready()) {
+        ESP_LOGI(kTag, "wifi retry feedback suppressed because BLE bridge is available");
+        return;
+    }
     const uint32_t now = tick_ms();
     if (!force && g_last_wifi_fail_feedback_ms != 0 &&
         static_cast<int32_t>(now - g_last_wifi_fail_feedback_ms) < 30000) {
@@ -1156,6 +1207,31 @@ void show_wifi_retry_later_feedback(bool force = false)
     draw_pet_notice(kFaceAngry, "WiFi retry later");
     voice_say(kVoiceSayWifiFail, force ? 0 : 30000);
     schedule_restore_normal();
+}
+
+void set_bridge_mode(BridgeMode mode, bool announce)
+{
+    g_bridge_mode = mode;
+    save_settings();
+    if (!announce) {
+        return;
+    }
+
+    switch (mode) {
+    case kBridgeModeBle:
+        draw_voice_notice(kFaceHappy, "Bridge BLE");
+        voice_say(kVoiceSayBridgeBle, 0);
+        break;
+    case kBridgeModeWifi:
+        draw_voice_notice(kFaceLook, "Bridge WiFi");
+        voice_say(kVoiceSayBridgeWifi, 0);
+        break;
+    case kBridgeModeAuto:
+    default:
+        draw_voice_notice(kFaceNormal, "Bridge auto");
+        voice_say(kVoiceSayBridgeAuto, 0);
+        break;
+    }
 }
 
 void process_voice_module_code(uint16_t code)
@@ -1342,6 +1418,15 @@ void process_voice_module_code(uint16_t code)
         g_idle_activity = 3;
         save_settings();
         draw_voice_notice(kFaceHappy, "Active");
+        break;
+    case 0x00B0:
+        set_bridge_mode(kBridgeModeAuto, true);
+        break;
+    case 0x00B1:
+        set_bridge_mode(kBridgeModeBle, true);
+        break;
+    case 0x00B2:
+        set_bridge_mode(kBridgeModeWifi, true);
         break;
     default: {
         char text[20] = {};
@@ -2022,6 +2107,29 @@ esp_err_t route_pet(httpd_req_t *req)
     return ESP_OK;
 }
 
+esp_err_t route_bridge(httpd_req_t *req)
+{
+    note_activity();
+    const std::string mode = query_value(req, "mode", 16);
+    if (mode == "ble" || mode == "bluetooth") {
+        set_bridge_mode(kBridgeModeBle, true);
+    } else if (mode == "wifi") {
+        set_bridge_mode(kBridgeModeWifi, true);
+    } else if (mode == "auto" || mode.empty()) {
+        set_bridge_mode(kBridgeModeAuto, true);
+    } else {
+        httpd_resp_set_status(req, "400 Bad Request");
+        send_json(req, "{\"e\":1,\"reason\":\"mode must be auto, ble, or wifi\"}");
+        return ESP_OK;
+    }
+
+    std::string json = "{\"ok\":1,\"bridge_mode\":\"";
+    json += bridge_mode_text(g_bridge_mode);
+    json += "\"}";
+    send_json(req, json.c_str());
+    return ESP_OK;
+}
+
 esp_err_t route_wifi_scan(httpd_req_t *req)
 {
     note_activity();
@@ -2091,8 +2199,12 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
         send_json(req, json.c_str());
     } else {
         const char *reason = sta_reason_text(g_sta_last_disconnect_reason);
-        draw_pet_notice(kFaceAngry, reason);
-        voice_say(kVoiceSayWifiFail, 0);
+        if (g_bridge_mode == kBridgeModeWifi || !ble_bridge_is_ready()) {
+            draw_pet_notice(kFaceAngry, reason);
+            voice_say(kVoiceSayWifiFail, 0);
+        } else {
+            ESP_LOGI(kTag, "manual wifi failure reported on web only because BLE bridge is available");
+        }
         std::string json = "{\"ok\":0,\"connected\":false,\"reason\":\"";
         json += json_escape_utf8(reason, 80);
         json += "\"}";
@@ -2325,9 +2437,9 @@ esp_err_t route_state(httpd_req_t *req)
     const VoiceModuleStatus voice = voice_module_get_status();
     char voice_code[7] = {};
     std::snprintf(voice_code, sizeof(voice_code), "0x%04X", static_cast<unsigned>(voice.last_code));
-    char json[1024];
+    char json[1280];
     const int written = std::snprintf(json, sizeof(json),
-                                      "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"voice_enabled\":%s,\"voice_ready\":%s,\"ble_ready\":%s,\"voice_code\":\"%s\",\"voice_frames\":%u,\"voice_bad\":%u,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"mdns\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                                      "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"voice_enabled\":%s,\"voice_ready\":%s,\"ble_ready\":%s,\"bridge_ready\":%s,\"bridge_mode\":\"%s\",\"voice_code\":\"%s\",\"voice_frames\":%u,\"voice_bad\":%u,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"mdns\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
                                       static_cast<unsigned>(g_current_view),
                                       static_cast<unsigned>(g_current_face),
                                       g_busy ? "true" : "false",
@@ -2337,6 +2449,8 @@ esp_err_t route_state(httpd_req_t *req)
                                       voice.enabled ? "true" : "false",
                                       voice.ready ? "true" : "false",
                                       ble_bridge_is_ready() ? "true" : "false",
+                                      bridge_available() ? "true" : "false",
+                                      bridge_mode_text(g_bridge_mode),
                                       voice_code,
                                       static_cast<unsigned>(voice.frame_count),
                                       static_cast<unsigned>(voice.bad_frame_count),
@@ -2409,6 +2523,7 @@ esp_err_t start_http_server()
     register_uri("/activity", HTTP_GET, route_activity);
     register_uri("/face", HTTP_GET, route_face);
     register_uri("/pet", HTTP_GET, route_pet);
+    register_uri("/bridge", HTTP_GET, route_bridge);
     register_uri("/wifi/scan", HTTP_GET, route_wifi_scan);
     register_uri("/wifi/connect", HTTP_GET, route_wifi_connect);
     register_uri("/wifi/forget", HTTP_GET, route_wifi_forget);
@@ -2580,7 +2695,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(g_ui_event_queue == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
     ESP_ERROR_CHECK(xTaskCreate(task_ui_event, "ui_event", 4096, nullptr, 4, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(task_voice_command, "voice_cmd", 6144, nullptr, 4, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ble_bridge_init(handle_ble_pet_event, nullptr));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ble_bridge_init(handle_ble_pet_event, current_ble_bridge_mode, nullptr));
     ESP_ERROR_CHECK_WITHOUT_ABORT(voice_module_init(handle_voice_module_code, nullptr));
     note_activity();
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);
@@ -2588,7 +2703,7 @@ extern "C" void app_main(void)
     for (uint8_t i = 0; i < 20 && sta_configured() && !g_sta_connected; ++i) {
         delay_ms(250);
     }
-    const bool startup_wifi_failed = sta_configured() && !g_sta_connected;
+    const bool startup_wifi_failed = sta_configured() && !g_sta_connected && !bridge_available();
     draw_wifi_info();
     if (startup_wifi_failed) {
         show_wifi_retry_later_feedback(true);

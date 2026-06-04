@@ -37,6 +37,7 @@ constexpr size_t kMaxPayloadLen = 192;
  *
  * Service UUID：6d6f6368-692d-7065-742d-627269646765
  * Write UUID：6d6f6368-692d-7065-742d-737461747573
+ * Mode UUID：6d6f6368-692d-7065-742d-62726964676d
  */
 const ble_uuid128_t kServiceUuid = BLE_UUID128_INIT(
     0x65, 0x67, 0x64, 0x69, 0x72, 0x62, 0x2d, 0x74,
@@ -44,10 +45,14 @@ const ble_uuid128_t kServiceUuid = BLE_UUID128_INIT(
 const ble_uuid128_t kWriteUuid = BLE_UUID128_INIT(
     0x73, 0x75, 0x74, 0x61, 0x74, 0x73, 0x2d, 0x74,
     0x65, 0x70, 0x2d, 0x69, 0x68, 0x63, 0x6f, 0x6d);
+const ble_uuid128_t kModeUuid = BLE_UUID128_INIT(
+    0x6d, 0x67, 0x64, 0x69, 0x72, 0x62, 0x2d, 0x74,
+    0x65, 0x70, 0x2d, 0x69, 0x68, 0x63, 0x6f, 0x6d);
 
 uint8_t g_own_addr_type = 0;
 std::atomic_bool g_ready{false};
 BlePetEventCallback g_callback = nullptr;
+BleBridgeModeCallback g_mode_callback = nullptr;
 void *g_user_ctx = nullptr;
 ble_npl_event g_adv_event;
 
@@ -313,7 +318,7 @@ void start_advertising()
 /**
  * @brief 收到 GATT 写入后解析并回调上层。
  */
-int gatt_access_cb(uint16_t, uint16_t, ble_gatt_access_ctxt *ctxt, void *)
+int gatt_status_access_cb(uint16_t, uint16_t, ble_gatt_access_ctxt *ctxt, void *)
 {
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
         return BLE_ATT_ERR_UNLIKELY;
@@ -341,13 +346,38 @@ int gatt_access_cb(uint16_t, uint16_t, ble_gatt_access_ctxt *ctxt, void *)
     return 0;
 }
 
+/**
+ * @brief 电脑端读取当前桥接偏好，用于 BLE/WiFi 自动选择。
+ */
+int gatt_mode_access_cb(uint16_t, uint16_t, ble_gatt_access_ctxt *ctxt, void *)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    const char *mode = g_mode_callback != nullptr ? g_mode_callback(g_user_ctx) : "auto";
+    if (mode == nullptr || mode[0] == '\0') {
+        mode = "auto";
+    }
+    return os_mbuf_append(ctxt->om, mode, std::strlen(mode)) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
 const ble_gatt_chr_def kGattCharacteristics[] = {
     {
         reinterpret_cast<const ble_uuid_t *>(&kWriteUuid),
-        gatt_access_cb,
+        gatt_status_access_cb,
         nullptr,
         nullptr,
         BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+        0,
+        nullptr,
+        nullptr,
+    },
+    {
+        reinterpret_cast<const ble_uuid_t *>(&kModeUuid),
+        gatt_mode_access_cb,
+        nullptr,
+        nullptr,
+        BLE_GATT_CHR_F_READ,
         0,
         nullptr,
         nullptr,
@@ -413,12 +443,15 @@ void host_task(void *)
 
 } // namespace
 
-esp_err_t ble_bridge_init(BlePetEventCallback callback, void *user_ctx)
+esp_err_t ble_bridge_init(BlePetEventCallback pet_callback,
+                          BleBridgeModeCallback mode_callback,
+                          void *user_ctx)
 {
     if (g_ready.load(std::memory_order_acquire)) {
         return ESP_OK;
     }
-    g_callback = callback;
+    g_callback = pet_callback;
+    g_mode_callback = mode_callback;
     g_user_ctx = user_ctx;
 
     ESP_RETURN_ON_ERROR(nimble_port_init(), kTag, "nimble init failed");
@@ -442,12 +475,22 @@ esp_err_t ble_bridge_init(BlePetEventCallback callback, void *user_ctx)
     return ESP_OK;
 }
 
+esp_err_t ble_bridge_init(BlePetEventCallback callback, void *user_ctx)
+{
+    return ble_bridge_init(callback, nullptr, user_ctx);
+}
+
 bool ble_bridge_is_ready()
 {
     return g_ready.load(std::memory_order_acquire);
 }
 
 #else
+
+esp_err_t ble_bridge_init(BlePetEventCallback, BleBridgeModeCallback, void *)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
 
 esp_err_t ble_bridge_init(BlePetEventCallback, void *)
 {

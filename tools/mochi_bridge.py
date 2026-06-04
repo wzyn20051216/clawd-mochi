@@ -30,7 +30,9 @@ MDNS_GROUP = ("224.0.0.251", 5353)
 BLE_DEVICE_NAME = "Clawd Mochi"
 BLE_SERVICE_UUID = "6d6f6368-692d-7065-742d-627269646765"
 BLE_STATUS_UUID = "6d6f6368-692d-7065-742d-737461747573"
+BLE_MODE_UUID = "6d6f6368-692d-7065-742d-62726964676d"
 BLE_DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+BRIDGE_MODES = {"auto", "ble", "wifi"}
 
 
 MOOD_ALIASES = {
@@ -63,6 +65,12 @@ def normalize_mood(mood: str) -> str:
 def ble_enabled() -> bool:
     """判断电脑端是否允许优先尝试 BLE。"""
     return os.environ.get("MOCHI_BLE", "1").strip().lower() not in BLE_DISABLED_VALUES
+
+
+def normalize_bridge_mode(mode: str | None) -> str:
+    """把设备返回的桥接模式规整为 auto/ble/wifi。"""
+    value = (mode or "auto").strip().lower()
+    return value if value in BRIDGE_MODES else "auto"
 
 
 def load_saved_host() -> str | None:
@@ -171,16 +179,28 @@ def resolve_host(host_arg: str | None) -> str:
     return candidate_hosts(host_arg)[0]
 
 
-def send_pet(host: str, mood: str, text: str, timeout: float) -> dict:
-    """通过 HTTP 把桌宠事件发送到 ESP32-S3。"""
-    query = urllib.parse.urlencode({"mood": normalize_mood(mood), "text": text})
-    url = f"http://{host}/pet?{query}"
+def http_get_json(host: str, path: str, timeout: float, params: dict[str, str] | None = None) -> dict:
+    """通过 HTTP GET 读取 ESP32 返回的 JSON。"""
+    query = urllib.parse.urlencode(params or {})
+    url = f"http://{host}{path}"
+    if query:
+        url += f"?{query}"
     with urllib.request.urlopen(url, timeout=timeout) as response:
         body = response.read().decode("utf-8", errors="replace")
     try:
         return json.loads(body or "{}")
     except json.JSONDecodeError:
         return {"raw": body}
+
+
+def send_pet(host: str, mood: str, text: str, timeout: float) -> dict:
+    """通过 HTTP 把桌宠事件发送到 ESP32-S3。"""
+    return http_get_json(host, "/pet", timeout, {"mood": normalize_mood(mood), "text": text})
+
+
+def read_state_http(host: str, timeout: float) -> dict:
+    """通过 HTTP 读取设备状态。"""
+    return http_get_json(host, "/state", timeout)
 
 
 def compact_ble_text(text: str, limit: int = 17) -> str:
@@ -210,21 +230,31 @@ def ble_payload(mood: str, text: str) -> bytes:
     return f"!{code}{compact_ble_text(text)}".encode("ascii", errors="ignore")
 
 
-async def send_pet_ble_async(mood: str, text: str, timeout: float) -> dict:
-    """通过 BLE GATT 写入桌宠状态。"""
+async def find_ble_device(timeout: float):
+    """扫描 Clawd Mochi BLE 设备。"""
     try:
-        from bleak import BleakClient, BleakScanner
+        from bleak import BleakScanner
     except ImportError as exc:
         raise RuntimeError("bleak not installed") from exc
 
     scan_timeout = max(0.6, min(timeout, 3.0))
-    device = await BleakScanner.find_device_by_filter(
+    return await BleakScanner.find_device_by_filter(
         lambda dev, adv: (
             (dev.name or "") == BLE_DEVICE_NAME
             or BLE_SERVICE_UUID.lower() in {uuid.lower() for uuid in (adv.service_uuids or [])}
         ),
         timeout=scan_timeout,
     )
+
+
+async def send_pet_ble_async(mood: str, text: str, timeout: float) -> dict:
+    """通过 BLE GATT 写入桌宠状态。"""
+    try:
+        from bleak import BleakClient
+    except ImportError as exc:
+        raise RuntimeError("bleak not installed") from exc
+
+    device = await find_ble_device(timeout)
     if device is None:
         raise TimeoutError("BLE device not found")
 
@@ -233,16 +263,76 @@ async def send_pet_ble_async(mood: str, text: str, timeout: float) -> dict:
     return {"ok": 1, "transport": "ble", "device": device.address}
 
 
+async def read_mode_ble_async(timeout: float) -> tuple[str, str]:
+    """通过 BLE 读取设备当前桥接模式。"""
+    try:
+        from bleak import BleakClient
+    except ImportError as exc:
+        raise RuntimeError("bleak not installed") from exc
+
+    device = await find_ble_device(timeout)
+    if device is None:
+        raise TimeoutError("BLE device not found")
+
+    async with BleakClient(device, timeout=timeout) as client:
+        raw = await client.read_gatt_char(BLE_MODE_UUID)
+    return normalize_bridge_mode(bytes(raw).decode("ascii", errors="ignore")), device.address
+
+
+async def send_pet_ble_respecting_mode_async(mood: str, text: str, timeout: float) -> dict:
+    """同一次 BLE 连接中读取模式，并在允许时发送状态。"""
+    try:
+        from bleak import BleakClient
+    except ImportError as exc:
+        raise RuntimeError("bleak not installed") from exc
+
+    device = await find_ble_device(timeout)
+    if device is None:
+        raise TimeoutError("BLE device not found")
+
+    async with BleakClient(device, timeout=timeout) as client:
+        raw = await client.read_gatt_char(BLE_MODE_UUID)
+        mode = normalize_bridge_mode(bytes(raw).decode("ascii", errors="ignore"))
+        if mode == "wifi":
+            return {"ok": 0, "transport": "ble", "device": device.address, "bridge_mode": mode, "skipped": "wifi"}
+        await client.write_gatt_char(BLE_STATUS_UUID, ble_payload(mood, text), response=False)
+    return {"ok": 1, "transport": "ble", "device": device.address, "bridge_mode": mode}
+
+
 def send_pet_ble(mood: str, text: str, timeout: float) -> dict:
     """同步封装 BLE 发送，便于 hook 直接调用。"""
     return asyncio.run(send_pet_ble_async(mood, text, timeout))
 
 
+def send_pet_ble_respecting_mode(mood: str, text: str, timeout: float) -> dict:
+    """同步封装：读取设备模式后按 BLE 发送或跳过。"""
+    return asyncio.run(send_pet_ble_respecting_mode_async(mood, text, timeout))
+
+
+def read_mode_ble(timeout: float) -> tuple[str, str]:
+    """同步读取 BLE 桥接模式。"""
+    return asyncio.run(read_mode_ble_async(timeout))
+
+
 def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float) -> tuple[str, dict]:
-    """优先 BLE，失败后按显式 host、保存 host、mDNS、热点地址依次发送。"""
+    """按设备桥接模式发送：auto=BLE优先，ble=只BLE，wifi=只WiFi。"""
+    force = normalize_bridge_mode(os.environ.get("MOCHI_TRANSPORT"))
+    if os.environ.get("MOCHI_TRANSPORT") is None:
+        force = "auto"
+
+    if force == "wifi":
+        return send_pet_wifi_candidates(host_arg, mood, text, timeout, None)
+
+    if force == "ble":
+        return "BLE", send_pet_ble(mood, text, timeout)
+
     if ble_enabled():
         try:
-            return "BLE", send_pet_ble(mood, text, timeout)
+            result = send_pet_ble_respecting_mode(mood, text, timeout)
+            mode = normalize_bridge_mode(str(result.get("bridge_mode") or "auto"))
+            if result.get("skipped") == "wifi":
+                return send_pet_wifi_candidates(host_arg, mood, text, timeout, None)
+            return "BLE", result
         except (RuntimeError, TimeoutError, OSError, asyncio.TimeoutError) as exc:
             last_ble_error: BaseException | None = exc
         except Exception as exc:
@@ -250,10 +340,28 @@ def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float) ->
     else:
         last_ble_error = None
 
+    return send_pet_wifi_candidates(host_arg, mood, text, timeout, last_ble_error)
+
+
+def send_pet_wifi_candidates(host_arg: str | None,
+                             mood: str,
+                             text: str,
+                             timeout: float,
+                             last_ble_error: BaseException | None) -> tuple[str, dict]:
+    """按候选 host 尝试 WiFi HTTP 发送。"""
     last_error: BaseException | None = None
     for host in candidate_hosts(host_arg):
         try:
-            return host, send_pet(host, mood, text, timeout)
+            state = read_state_http(host, min(timeout, 1.2))
+            mode = normalize_bridge_mode(str(state.get("bridge_mode") or "auto"))
+            if mode == "ble":
+                if last_ble_error:
+                    raise last_ble_error
+                raise TimeoutError("device bridge mode is BLE")
+            result = send_pet(host, mood, text, timeout)
+            if isinstance(result, dict):
+                result.setdefault("bridge_mode", mode)
+            return host, result
         except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
             last_error = exc
     if last_error:
