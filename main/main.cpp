@@ -62,6 +62,19 @@ constexpr const char *kNvsNamespace = "mochi";
 constexpr uint32_t kAutoSleepTimeoutMs = 10 * 60 * 1000;
 constexpr uint8_t kSleepBrightness = 10;
 constexpr uint8_t kDefaultBrightness = 80;
+constexpr uint16_t kVoiceSayWifiOk = 0xFF81;
+constexpr uint16_t kVoiceSayWifiFail = 0xFF82;
+constexpr uint16_t kVoiceSayDone = 0xFF83;
+constexpr uint16_t kVoiceSayError = 0xFF84;
+constexpr uint16_t kVoiceSayReady = 0xFF85;
+constexpr uint16_t kVoiceSaySleep = 0xFF86;
+constexpr uint16_t kVoiceSayThinking = 0xFF87;
+constexpr uint16_t kVoiceSayRunning = 0xFF88;
+constexpr uint16_t kVoiceSaySpeaking = 0xFF89;
+constexpr uint16_t kVoiceSayNight = 0xFF8A;
+constexpr uint16_t kVoiceSayDay = 0xFF8B;
+constexpr uint16_t kVoiceSayScreenOff = 0xFF8C;
+constexpr uint16_t kVoiceSayScreenOn = 0xFF8D;
 
 enum View : uint8_t {
     kViewEyesNormal = 0,
@@ -115,6 +128,7 @@ std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
 QueueHandle_t g_voice_cmd_queue = nullptr;
+uint32_t g_last_voice_say_ms = 0;
 
 constexpr char kIndexHtml[] = R"HTML(
 <!doctype html><html lang="zh-CN"><head>
@@ -853,6 +867,20 @@ void set_voice_brightness_delta(int delta)
     save_settings();
 }
 
+void voice_say(uint16_t code, uint32_t min_gap_ms = 900)
+{
+    const uint32_t now = tick_ms();
+    if (min_gap_ms > 0 && static_cast<int32_t>(now - g_last_voice_say_ms) < static_cast<int32_t>(min_gap_ms)) {
+        return;
+    }
+    const esp_err_t err = voice_module_send_code(code);
+    if (err == ESP_OK) {
+        g_last_voice_say_ms = now;
+    } else if (err != ESP_ERR_NOT_SUPPORTED && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "voice say failed: code=0x%04X err=%s", code, esp_err_to_name(err));
+    }
+}
+
 void handle_voice_module_code(uint16_t code, void *)
 {
     if (g_voice_cmd_queue == nullptr) {
@@ -875,11 +903,14 @@ void process_voice_module_code(uint16_t code)
         draw_voice_notice(kFaceHappy, "Hello");
         break;
     case 0x0200:
+        ESP_LOGI(kTag, "ignore module auto rest frame; mochi sleep is state-driven");
+        break;
     case 0x0003:
         draw_voice_notice(kFaceSleepy, "Sleep");
         g_sleeping = true;
         g_display.setBacklightBrightness(kSleepBrightness);
         g_backlight_brightness = kSleepBrightness;
+        voice_say(kVoiceSaySleep, 0);
         break;
     case 0x026F:
         draw_voice_notice(kFaceSleepy, "Rest");
@@ -973,29 +1004,37 @@ void process_voice_module_code(uint16_t code)
         break;
     case 0x0090:
         draw_voice_notice(kFaceNormal, "Ready");
+        voice_say(kVoiceSayReady);
         break;
     case 0x0091:
         draw_voice_notice(kFaceLook, "Thinking");
+        voice_say(kVoiceSayThinking);
         break;
     case 0x0092:
         draw_voice_notice(kFaceSurprise, "Running");
+        voice_say(kVoiceSayRunning);
         break;
     case 0x0093:
         draw_voice_notice(kFaceHappy, "Speaking");
+        voice_say(kVoiceSaySpeaking);
         break;
     case 0x0094:
         draw_voice_notice(kFaceHappy, "Done");
+        voice_say(kVoiceSayDone);
         break;
     case 0x0095:
         draw_voice_notice(kFaceAngry, "Error");
+        voice_say(kVoiceSayError);
         break;
     case 0x00A0:
         set_backlight(true);
         draw_voice_notice(kFaceHappy, "Screen on");
+        voice_say(kVoiceSayScreenOn);
         break;
     case 0x00A1:
         draw_voice_notice(kFaceSleepy, "Screen off");
         set_backlight(false);
+        voice_say(kVoiceSayScreenOff);
         break;
     case 0x00A2:
         set_background_rgb(0x402000);
@@ -1004,6 +1043,7 @@ void process_voice_module_code(uint16_t code)
         set_brightness(18);
         save_settings();
         draw_voice_notice(kFaceSleepy, "Night");
+        voice_say(kVoiceSayNight);
         break;
     case 0x00A3:
         set_background_rgb(kDefaultBgRgb);
@@ -1012,6 +1052,7 @@ void process_voice_module_code(uint16_t code)
         set_brightness(80);
         save_settings();
         draw_voice_notice(kFaceHappy, "Day");
+        voice_say(kVoiceSayDay);
         break;
     case 0x00A4: {
         const int face = esp_random() % (static_cast<int>(kFaceLook) + 1);
@@ -1414,6 +1455,7 @@ void task_auto_sleep(void *)
             g_sleeping = true;
             g_display.setBacklightBrightness(kSleepBrightness);
             g_backlight_brightness = kSleepBrightness;
+            voice_say(kVoiceSaySleep, 0);
         }
     }
 }
@@ -1642,6 +1684,19 @@ esp_err_t route_pet(httpd_req_t *req)
     const std::string text = query_value(req, "text", 256);
     mark_manual_animation();
     draw_pet_notice(mood_to_face(mood), text);
+    if (mood == "thinking" || mood == "look") {
+        voice_say(kVoiceSayThinking);
+    } else if (mood == "running" || mood == "busy") {
+        voice_say(kVoiceSayRunning);
+    } else if (mood == "speaking") {
+        voice_say(kVoiceSaySpeaking);
+    } else if (mood == "done" || mood == "ok" || mood == "happy") {
+        voice_say(kVoiceSayDone);
+    } else if (mood == "error" || mood == "fail" || mood == "angry") {
+        voice_say(kVoiceSayError);
+    } else if (mood == "idle" || mood == "sleepy") {
+        voice_say(kVoiceSaySleep);
+    }
     send_json(req);
     return ESP_OK;
 }
@@ -1710,6 +1765,7 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
             draw_face(kFaceNormal);
             g_busy = false;
         }
+        voice_say(kVoiceSayWifiOk, 0);
         std::string json = "{\"ok\":1,\"connected\":true,\"ip\":\"";
         json += ip;
         json += "\",\"url\":\"http://";
@@ -1721,6 +1777,7 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
     } else {
         const char *reason = sta_reason_text(g_sta_last_disconnect_reason);
         draw_pet_notice(kFaceAngry, reason);
+        voice_say(kVoiceSayWifiFail, 0);
         std::string json = "{\"ok\":0,\"connected\":false,\"reason\":\"";
         json += json_escape_ascii(reason, 40);
         json += "\"}";
@@ -1770,6 +1827,7 @@ esp_err_t route_audio_pcm(httpd_req_t *req)
 
     mark_manual_animation();
     draw_pet_notice(kFaceHappy, "Speaking");
+    voice_say(kVoiceSaySpeaking);
     std::vector<uint8_t> buffer(kAudioRecvBufferSize + 1);
     bool has_pending_byte = false;
     uint8_t pending_byte = 0;
@@ -1782,6 +1840,7 @@ esp_err_t route_audio_pcm(httpd_req_t *req)
                 continue;
             }
             draw_pet_notice(kFaceAngry, "Audio recv fail");
+            voice_say(kVoiceSayError, 0);
             httpd_resp_set_status(req, "400 Bad Request");
             send_json(req, "{\"ok\":0,\"reason\":\"recv failed\"}");
             return ESP_OK;
@@ -1805,6 +1864,7 @@ esp_err_t route_audio_pcm(httpd_req_t *req)
             if (err != ESP_OK) {
                 ESP_LOGW(kTag, "audio pcm failed: %s", esp_err_to_name(err));
                 draw_pet_notice(kFaceAngry, "Audio fail");
+                voice_say(kVoiceSayError, 0);
                 httpd_resp_set_status(req, "500 Internal Server Error");
                 send_json(req, "{\"ok\":0,\"reason\":\"play failed\"}");
                 return ESP_OK;
@@ -1814,12 +1874,14 @@ esp_err_t route_audio_pcm(httpd_req_t *req)
     }
     if (has_pending_byte) {
         draw_pet_notice(kFaceAngry, "Audio size fail");
+        voice_say(kVoiceSayError, 0);
         httpd_resp_set_status(req, "400 Bad Request");
         send_json(req, "{\"ok\":0,\"reason\":\"odd pcm size\"}");
         return ESP_OK;
     }
 
     draw_pet_notice(kFaceNormal, "Ready");
+    voice_say(kVoiceSayDone, 0);
     send_json(req, "{\"ok\":1,\"audio\":true}");
     return ESP_OK;
 }
