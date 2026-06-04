@@ -271,6 +271,7 @@ switch ($Action) {
         Install-BridgeFiles
         Install-BleDependency
         $command = Install-GlobalHooks
+        Stop-MochiDaemon
         Start-MochiDaemon
         Write-Info "Global bridge installed."
         Write-Info "Hook command: $command"

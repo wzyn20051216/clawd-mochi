@@ -161,7 +161,15 @@ def main() -> int:
     mood, text = map_event(data)
     event = str(data.get("hook_event_name") or data.get("event") or "manual")
     try:
-        host, _ = send_pet_auto(args.host, mood, text, args.timeout)
+        host, _ = send_pet_auto(
+            args.host,
+            mood,
+            text,
+            min(args.timeout, 1.0),
+            allow_fallback=False,
+            daemon_autostart=False,
+            daemon_drop_if_disconnected=True,
+        )
         log_hook(f"{event}: pet {mood} {text} -> {host}")
     except Exception as exc:  # noqa: BLE001 - hook 失败不能影响 Codex / Claude 主流程。
         log_hook(f"{event}: pet failed {mood} {text}: {exc}")

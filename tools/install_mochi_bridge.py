@@ -74,7 +74,11 @@ def hook_command(python_bin: str, event_path: Path) -> str:
     """生成适合当前系统 shell 执行的 hook 命令。"""
     parts = [python_bin, str(event_path), "--timeout", "5"]
     if os.name == "nt":
-        return subprocess.list2cmdline(parts)
+        quoted = []
+        for part in parts:
+            value = part.replace("\\", "/")
+            quoted.append(f'"{value.replace(chr(34), chr(92) + chr(34))}"')
+        return " ".join(quoted)
     return shlex.join(parts)
 
 
@@ -266,6 +270,7 @@ def main() -> int:
         install_bridge_files(install_dir, args.host)
         ensure_ble_dependency(args.python)
         command = install_hooks(install_dir, args.python)
+        stop_daemon(install_dir, args.python)
         start_daemon(install_dir, args.python, args.host)
         info("Global bridge installed.")
         info(f"Hook command: {command}")

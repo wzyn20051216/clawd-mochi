@@ -437,9 +437,23 @@ def daemon_status(timeout: float = 0.5) -> dict:
     return daemon_post("/status", None, timeout)
 
 
-def send_pet_daemon(host_arg: str | None, mood: str, text: str, timeout: float) -> dict:
+def send_pet_daemon(host_arg: str | None,
+                    mood: str,
+                    text: str,
+                    timeout: float,
+                    drop_if_disconnected: bool = False) -> dict:
     """通过本机常驻桥接器发送桌宠状态。"""
-    result = daemon_post("/pet", {"host": host_arg, "mood": mood, "text": text, "timeout": timeout}, timeout + 1.0)
+    result = daemon_post(
+        "/pet",
+        {
+            "host": host_arg,
+            "mood": mood,
+            "text": text,
+            "timeout": timeout,
+            "drop_if_disconnected": drop_if_disconnected,
+        },
+        timeout + 1.0,
+    )
     if result.get("ok") != 1:
         raise RuntimeError(str(result.get("error") or result))
     return result
@@ -623,6 +637,16 @@ class MochiDaemonHandler(BaseHTTPRequestHandler):
     def handle_pet(self, payload: dict) -> None:
         """把 HTTP 请求转成后台 BLE 队列事件。"""
         timeout = float(payload.get("timeout") or 3.0)
+        if payload.get("drop_if_disconnected") is True:
+            snapshot = self.daemon_state.snapshot()
+            if not snapshot.get("connected"):
+                self.send_json({
+                    "ok": 0,
+                    "error": "daemon not connected",
+                    "connected": False,
+                    "phase": snapshot.get("phase"),
+                }, 503)
+                return
         request = DaemonRequest(
             str(payload.get("host") or "") or None,
             str(payload.get("mood") or "normal"),
@@ -669,7 +693,14 @@ def stop_daemon(timeout: float = 1.0) -> dict:
     return daemon_post("/shutdown", None, timeout)
 
 
-def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float, use_daemon: bool = True) -> tuple[str, dict]:
+def send_pet_auto(host_arg: str | None,
+                  mood: str,
+                  text: str,
+                  timeout: float,
+                  use_daemon: bool = True,
+                  allow_fallback: bool = True,
+                  daemon_autostart: bool = True,
+                  daemon_drop_if_disconnected: bool = False) -> tuple[str, dict]:
     """按设备桥接模式发送：auto=BLE优先，ble=只BLE，wifi=只WiFi。"""
     force = normalize_bridge_mode(os.environ.get("MOCHI_TRANSPORT"))
     if os.environ.get("MOCHI_TRANSPORT") is None:
@@ -677,13 +708,15 @@ def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float, us
 
     if use_daemon and force == "auto" and daemon_enabled():
         try:
-            return "DAEMON", send_pet_daemon(host_arg, mood, text, timeout)
+            return "DAEMON", send_pet_daemon(host_arg, mood, text, timeout, daemon_drop_if_disconnected)
         except Exception:
-            if daemon_autostart_enabled() and start_daemon_background(host_arg):
+            if daemon_autostart and daemon_autostart_enabled() and start_daemon_background(host_arg):
                 try:
-                    return "DAEMON", send_pet_daemon(host_arg, mood, text, timeout)
+                    return "DAEMON", send_pet_daemon(host_arg, mood, text, timeout, daemon_drop_if_disconnected)
                 except Exception:
                     pass
+            if not allow_fallback:
+                raise
 
     if force == "wifi":
         return send_pet_wifi_candidates(host_arg, mood, text, timeout, None)
