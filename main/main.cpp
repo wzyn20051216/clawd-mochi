@@ -932,6 +932,99 @@ void handle_voice_module_code(uint16_t code, void *)
         save_settings();
         draw_voice_notice(kFaceLove, "Dance");
         break;
+    case 0x0080:
+        draw_voice_notice(kFaceNormal, "Normal");
+        break;
+    case 0x0081:
+        draw_voice_notice(kFaceHappy, "Happy");
+        break;
+    case 0x0082:
+        draw_voice_notice(kFaceSleepy, "Sleepy");
+        break;
+    case 0x0083:
+        draw_voice_notice(kFaceAngry, "Angry");
+        break;
+    case 0x0084:
+        draw_voice_notice(kFaceSurprise, "Surprise");
+        break;
+    case 0x0085:
+        draw_voice_notice(kFaceWink, "Wink");
+        break;
+    case 0x0086:
+        draw_voice_notice(kFaceLove, "Love");
+        break;
+    case 0x0087:
+        draw_voice_notice(kFaceLook, "Look");
+        break;
+    case 0x0088:
+        draw_voice_notice(kFaceSquish, "Squish");
+        break;
+    case 0x0090:
+        draw_voice_notice(kFaceNormal, "Ready");
+        break;
+    case 0x0091:
+        draw_voice_notice(kFaceLook, "Thinking");
+        break;
+    case 0x0092:
+        draw_voice_notice(kFaceSurprise, "Running");
+        break;
+    case 0x0093:
+        draw_voice_notice(kFaceHappy, "Speaking");
+        break;
+    case 0x0094:
+        draw_voice_notice(kFaceHappy, "Done");
+        break;
+    case 0x0095:
+        draw_voice_notice(kFaceAngry, "Error");
+        break;
+    case 0x00A0:
+        set_backlight(true);
+        draw_voice_notice(kFaceHappy, "Screen on");
+        break;
+    case 0x00A1:
+        draw_voice_notice(kFaceSleepy, "Screen off");
+        set_backlight(false);
+        break;
+    case 0x00A2:
+        set_background_rgb(0x402000);
+        g_anim_speed = 1;
+        g_idle_activity = 1;
+        set_brightness(18);
+        save_settings();
+        draw_voice_notice(kFaceSleepy, "Night");
+        break;
+    case 0x00A3:
+        set_background_rgb(kDefaultBgRgb);
+        g_anim_speed = 2;
+        g_idle_activity = 2;
+        set_brightness(80);
+        save_settings();
+        draw_voice_notice(kFaceHappy, "Day");
+        break;
+    case 0x00A4: {
+        const int face = esp_random() % (static_cast<int>(kFaceLook) + 1);
+        draw_voice_notice(static_cast<Face>(face), "Random face");
+        break;
+    }
+    case 0x00A5: {
+        const uint8_t r = 96 + (esp_random() % 160);
+        const uint8_t g = 80 + (esp_random() % 176);
+        const uint8_t b = esp_random() % 80;
+        set_background_rgb((static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | b);
+        save_settings();
+        draw_voice_notice(kFaceHappy, "Random color");
+        break;
+    }
+    case 0x00A6:
+        g_idle_activity = 1;
+        save_settings();
+        draw_voice_notice(kFaceSleepy, "Quiet");
+        break;
+    case 0x00A7:
+        g_idle_activity = 3;
+        save_settings();
+        draw_voice_notice(kFaceHappy, "Active");
+        break;
     default: {
         char text[20] = {};
         std::snprintf(text, sizeof(text), "Voice %04X", static_cast<unsigned>(code));
