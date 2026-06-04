@@ -23,6 +23,8 @@ E:\desktop\clawd mochi
 │   ├── Kconfig.projbuild
 │   ├── display.cpp
 │   ├── display.hpp
+│   ├── voice_module.cpp
+│   ├── voice_module.hpp
 │   └── main.cpp
 └── upstream
     └── clawd_mochi.ino
@@ -42,72 +44,6 @@ E:\desktop\clawd mochi
 | BL | GPIO3 |
 | VCC | 3V3 |
 | GND | GND |
-
-## I2S 语音输出
-
-这是早期方案，当前主线已改为亚博智能 / CI1302 离线语音交互模块播报固定语音。I2S + `MAX98357A` 仍保留为遗留可选方案，但日常不推荐继续接功放和喇叭。
-
-默认接线：
-
-| MAX98357A 引脚 | ESP32-S3 GPIO |
-| --- | --- |
-| BCLK / BCK | GPIO15 |
-| LRC / WS | GPIO16 |
-| DIN | GPIO17 |
-| VIN | 5V 或 3V3 |
-| GND | GND |
-
-音频格式固定为：
-
-```text
-16000 Hz / 16-bit little-endian / mono PCM
-```
-
-网页里可以点击“测试声音”，也可以用电脑端脚本发送测试音：
-
-```powershell
-py -3 tools\mochi_audio.py
-```
-
-电脑端也支持 Windows 本地离线 TTS，把文字合成后推给 ESP32 播放：
-
-```powershell
-py -3 tools\mochi_audio.py --say "Hello, I am Mochi."
-```
-
-列出当前 Windows 可用语音：
-
-```powershell
-py -3 tools\mochi_audio.py --list-voices
-```
-
-指定语音：
-
-```powershell
-py -3 tools\mochi_audio.py --say "Build complete." --voice "Microsoft Zira Desktop"
-```
-
-如果还想启用早期 Windows TTS + I2S 功放路线，需要在 `menuconfig` 打开 `Enable I2S speaker output`，并设置旧版 TTS 环境变量后重新打开终端：
-
-```powershell
-$env:MOCHI_TTS_LEGACY="1"
-```
-
-启用后，`tools\codex_mochi.cmd` 和 `tools\claude_mochi.cmd` 才会尝试用 Windows 本地 TTS 合成语音并推送到 ESP32 的 I2S 输出。当前默认路线是离线语音模块播固定语音，不需要这个环境变量。
-
-可选指定语音：
-
-```powershell
-$env:MOCHI_VOICE="Microsoft Zira Desktop"
-```
-
-限制每次最多朗读的字符数：
-
-```powershell
-$env:MOCHI_SPEAK_MAX_CHARS="220"
-```
-
-如果 GPIO 不方便，在 `idf.py menuconfig` 的 `Clawd Mochi -> Audio` 里修改 `BCLK / WS / DOUT`。
 
 ## 离线语音模块
 
@@ -274,7 +210,7 @@ E:\desktop\clawd mochi\build\clawd_mochi_s3.bin
 - 当前 ESP-IDF 页面是移植后的轻量控制页，不是原 `.ino` 内嵌 HTML 的逐字节复刻。
 - 显示层使用 240x240 RGB565 DMA 帧缓冲，约占 115KB RAM，适合 ESP32-S3。
 - HTTP 请求处理期间会同步执行动画，动画过程中新的 Web 请求会短暂等待。
-- 未接入物理按键、传感器、音频或 OTA。
+- 未接入物理按键、传感器或 OTA。
 
 ## Claude / Codex 桌宠桥接
 

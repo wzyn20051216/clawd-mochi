@@ -6,28 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
-import sys
-from pathlib import Path
 from typing import Any
 
 from mochi_bridge import configure_stdio, send_pet_auto
-from mochi_audio import speak_auto
-from mochi_event import compact_text, map_event, post_tool_failed
-
-TEXT_KEYS = {"text", "content", "delta", "output_text", "result", "message"}
-SKIP_TEXT_KEYS = {
-    "type",
-    "subtype",
-    "role",
-    "id",
-    "tool_name",
-    "name",
-    "command",
-    "status",
-    "event",
-}
+from mochi_event import compact_text, map_event
 
 
 def command_to_text(command: list[str]) -> str:
@@ -43,130 +26,6 @@ def send_status(host_arg: str | None, mood: str, text: str, timeout: float) -> N
         send_pet_auto(host_arg, mood, text, timeout)
     except Exception:
         pass
-
-
-def speak_status(host_arg: str | None, text: str, timeout: float) -> None:
-    """兼容旧版 Windows TTS；默认改由 ESP32 控制语音模块播报。"""
-    if os.environ.get("MOCHI_TTS_LEGACY", "").lower() not in {"1", "true", "yes", "on"}:
-        return
-    try:
-        speak_auto(host_arg, text, max(5.0, timeout), os.environ.get("MOCHI_VOICE", ""), 0, 90)
-    except Exception:
-        pass
-
-
-def speech_enabled() -> bool:
-    """是否启用旧版 Windows TTS。"""
-    return os.environ.get("MOCHI_TTS_LEGACY", "").lower() in {"1", "true", "yes", "on"}
-
-
-def speak_text(host_arg: str | None, text: str, timeout: float) -> None:
-    """播放一段回复文本，失败时不影响 agent 主流程。"""
-    if not speech_enabled():
-        return
-    cleaned = clean_spoken_reply(text)
-    if not cleaned:
-        return
-    try:
-        speak_auto(host_arg, cleaned, max(10.0, timeout), os.environ.get("MOCHI_VOICE", ""), 0, 90)
-    except Exception:
-        pass
-
-
-def clean_spoken_reply(text: str) -> str:
-    """把最终回复清理成适合 TTS 的短文本。"""
-    limit = int(os.environ.get("MOCHI_SPEAK_MAX_CHARS", "220") or "220")
-    cleaned = re.sub(r"```.*?```", " ", text, flags=re.S)
-    cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
-    cleaned = re.sub(r"https?://\S+", " 链接 ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    if not cleaned:
-        return ""
-    return cleaned[: max(40, limit)]
-
-
-def extract_text_value(value: Any, depth: int = 0) -> list[str]:
-    """从常见 agent JSON 结构里保守提取自然语言文本。"""
-    if depth > 6:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        parts: list[str] = []
-        for item in value:
-            parts.extend(extract_text_value(item, depth + 1))
-        return parts
-    if isinstance(value, dict):
-        parts = []
-        for key, item in value.items():
-            key_text = str(key)
-            if key_text in SKIP_TEXT_KEYS:
-                continue
-            if key_text in TEXT_KEYS:
-                parts.extend(extract_text_value(item, depth + 1))
-        return parts
-    return []
-
-
-def codex_event_reply_text(event: dict[str, Any]) -> str:
-    """从 Codex JSON 事件提取回复文本片段。"""
-    event_type = str(event.get("type") or event.get("event") or "")
-    if event_type in {"agent_message.delta", "response.output_text.delta"}:
-        for key in ("delta", "text", "content"):
-            value = event.get(key)
-            if isinstance(value, str):
-                return value
-        return " ".join(extract_text_value(event.get("item")))
-
-    item = event.get("item")
-    item_type = str(item.get("type") or "") if isinstance(item, dict) else ""
-    if event_type == "item.completed" and item_type == "agent_message" and isinstance(item, dict):
-        return " ".join(extract_text_value(item))
-    if event_type in {"turn.completed", "session.completed", "thread.completed"}:
-        return " ".join(extract_text_value(event))
-    return ""
-
-
-def claude_event_reply_text(event: dict[str, Any]) -> str:
-    """从 Claude stream-json 事件提取回复文本片段。"""
-    event_type = str(event.get("type") or "")
-    if event_type == "assistant":
-        message = event.get("message")
-        if isinstance(message, dict):
-            return " ".join(extract_text_value(message.get("content")))
-        return " ".join(extract_text_value(event.get("content")))
-    if event_type == "result":
-        result = event.get("result")
-        if isinstance(result, str):
-            return result
-        return " ".join(extract_text_value(result))
-    return ""
-
-
-class ReplyCapture:
-    """收集 agent 流式回复，结束时朗读最终回答。"""
-
-    def __init__(self, mode: str) -> None:
-        self.mode = mode
-        self.parts: list[str] = []
-        self.last_full = ""
-
-    def feed(self, event: dict[str, Any]) -> None:
-        text = codex_event_reply_text(event) if self.mode == "codex" else claude_event_reply_text(event)
-        if not text:
-            return
-        event_type = str(event.get("type") or event.get("event") or "")
-        if event_type in {"item.completed", "turn.completed", "session.completed", "thread.completed", "assistant", "result"}:
-            if len(text) >= len(self.last_full):
-                self.last_full = text
-        else:
-            self.parts.append(text)
-
-    def final_text(self) -> str:
-        delta_text = "".join(self.parts).strip()
-        if self.last_full and (not delta_text or len(self.last_full) >= len(delta_text)):
-            return self.last_full
-        return delta_text
 
 
 def codex_event_to_status(event: dict[str, Any]) -> tuple[str, str] | None:
@@ -241,7 +100,6 @@ def claude_event_to_status(event: dict[str, Any]) -> tuple[str, str] | None:
 def run_stream(command: list[str], mode: str, host_arg: str | None, timeout: float) -> int:
     """运行 agent 命令并消费 JSONL 事件流。"""
     send_status(host_arg, "thinking", mode.title(), timeout)
-    speak_status(host_arg, f"{mode} started", timeout)
     process = subprocess.Popen(
         command_to_text(command),
         stdout=subprocess.PIPE,
@@ -254,7 +112,6 @@ def run_stream(command: list[str], mode: str, host_arg: str | None, timeout: flo
     )
 
     mapper = codex_event_to_status if mode == "codex" else claude_event_to_status
-    replies = ReplyCapture(mode)
     assert process.stdout is not None
     for line in process.stdout:
         print(line, end="")
@@ -262,7 +119,6 @@ def run_stream(command: list[str], mode: str, host_arg: str | None, timeout: flo
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        replies.feed(event)
         status = mapper(event)
         if status:
             send_status(host_arg, status[0], status[1], timeout)
@@ -270,13 +126,8 @@ def run_stream(command: list[str], mode: str, host_arg: str | None, timeout: flo
     return_code = process.wait()
     if return_code == 0:
         send_status(host_arg, "happy", f"{mode.title()} OK", timeout)
-        final_reply = replies.final_text()
-        speak_text(host_arg, final_reply, timeout)
-        if not final_reply:
-            speak_status(host_arg, f"{mode} done", timeout)
     else:
         send_status(host_arg, "error", f"{mode.title()} FAIL", timeout)
-        speak_status(host_arg, f"{mode} failed", timeout)
     return return_code
 
 

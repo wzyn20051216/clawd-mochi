@@ -73,29 +73,6 @@ menu "Clawd Mochi"
         string "WiFi station password"
         default ""
 
-    menu "Audio"
-
-        config MOCHI_AUDIO_ENABLE
-            bool "Enable I2S speaker output"
-            default n
-
-        config MOCHI_AUDIO_PIN_BCLK
-            int "I2S speaker BCLK GPIO"
-            depends on MOCHI_AUDIO_ENABLE
-            default 15
-
-        config MOCHI_AUDIO_PIN_WS
-            int "I2S speaker LRC/WS GPIO"
-            depends on MOCHI_AUDIO_ENABLE
-            default 16
-
-        config MOCHI_AUDIO_PIN_DOUT
-            int "I2S speaker DIN/DOUT GPIO"
-            depends on MOCHI_AUDIO_ENABLE
-            default 17
-
-    endmenu
-
     menu "Voice Module"
 
         config MOCHI_VOICE_MODULE_ENABLE
