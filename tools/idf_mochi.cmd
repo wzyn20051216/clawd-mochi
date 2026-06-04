@@ -2,10 +2,10 @@
 setlocal
 
 set "PROJECT_ROOT=%~dp0.."
-set "IDF_PATH=E:\Espressif\frameworks\esp-idf-v5.5.2"
-set "IDF_TOOLS_PATH=E:\Espressif\tools"
-set "IDF_PYTHON_ENV_PATH=E:\Espressif\tools\python_env\idf5.5_py3.11_env"
-set "PATH=E:\Espressif\tools\idf-python\3.11.2;%PATH%"
+if "%IDF_PATH%"=="" (
+    echo IDF_PATH is not set. Please run this helper inside an ESP-IDF terminal. 1>&2
+    exit /b 1
+)
 set "CONDA_PREFIX="
 set "CONDA_DEFAULT_ENV="
 set "CONDA_PROMPT_MODIFIER="
@@ -14,6 +14,7 @@ set "PYTHONPATH="
 
 if not exist "%IDF_PATH%\export.bat" (
     echo Missing ESP-IDF export.bat: "%IDF_PATH%\export.bat" 1>&2
+    echo Please open an ESP-IDF terminal, or set IDF_PATH to your ESP-IDF install path. 1>&2
     exit /b 1
 )
 

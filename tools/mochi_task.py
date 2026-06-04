@@ -38,8 +38,7 @@ def print_command_hint(command: list[str]) -> None:
     exe = Path(command[0]).name.lower()
     if exe == "idf.py" and shutil.which("idf.py") is None:
         print("提示：当前终端没有加载 ESP-IDF 环境，所以找不到 idf.py。", file=sys.stderr)
-        print('可以先运行：cd "E:\\Espressif\\frameworks\\esp-idf-v5.5.2"; .\\export.ps1', file=sys.stderr)
-        print('然后回到项目目录：cd "E:\\desktop\\clawd mochi"', file=sys.stderr)
+        print("请先打开 ESP-IDF 终端，或进入 ESP-IDF 安装目录运行 export 脚本。", file=sys.stderr)
 
 
 def main() -> int:

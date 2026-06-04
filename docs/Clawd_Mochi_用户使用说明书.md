@@ -2,6 +2,8 @@
 
 本文档面向第一次拿到 Clawd Mochi 的用户。照着做，你可以完成硬件接线、固件烧录、网页配网、语音模块配置，以及 Claude / Codex 桌宠状态联动。
 
+说明：本项目是独立社区项目，不是 Anthropic、OpenAI、Claude Code 或 Codex 的官方产品。Claude、Claude Code、Clawd、Codex、OpenAI 等名称仅用于说明兼容或联动对象，相关商标归各自权利人所有。
+
 ## 0. 最快上手流程
 
 如果你已经拿到了接好线并烧录好的成品，只需要做这几步：
@@ -189,7 +191,7 @@ http://clawd-mochi.local
 如果打不开，就看屏幕或网页提示的备用 IP，例如：
 
 ```text
-http://172.20.10.2
+http://192.168.1.123
 ```
 
 ## 6. 网页控制说明
@@ -319,13 +321,13 @@ python3 tools/mochi_bridge.py --ping --host clawd-mochi.local
 Windows：
 
 ```powershell
-py -3 tools\mochi_bridge.py --ping --host 172.20.10.2
+py -3 tools\mochi_bridge.py --ping --host 192.168.1.123
 ```
 
 macOS / Linux：
 
 ```bash
-python3 tools/mochi_bridge.py --ping --host 172.20.10.2
+python3 tools/mochi_bridge.py --ping --host 192.168.1.123
 ```
 
 ### 8.2 安装全局桥接器
@@ -475,7 +477,7 @@ ST7735 默认值是：
 例如：
 
 ```text
-http://172.20.10.2
+http://192.168.1.123
 ```
 
 ### 语音模块说话没反应

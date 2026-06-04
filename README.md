@@ -1,10 +1,16 @@
-# Clawd Mochi ESP32-S3 ESP-IDF 移植版
+# Clawd Mochi ESP32-S3 ESP-IDF Port
 
 本工程从开源项目 `yousifamanuel/clawd-mochi` 拉取代码，并将 Arduino `.ino` 版本移植为 ESP-IDF 工程，目标开发板为 ESP32-S3。
 
 当前默认屏幕已切到 **ST7735 1.8 寸 128x160**，后续 1.54 寸 ST7789 240x240 到货后可在 `menuconfig` 中切回。
 
 面向最终用户的安装、配置和使用说明见：[Clawd Mochi 用户使用说明书](docs/Clawd_Mochi_用户使用说明书.md)。
+
+## 免责声明
+
+这是一个独立的社区项目，并非 Anthropic、OpenAI、Claude Code 或 Codex 的官方产品，也不隶属于或受其赞助、认可。Claude、Claude Code、Clawd、Codex、OpenAI 等名称仅用于说明兼容或联动对象，相关商标归各自权利人所有。
+
+本仓库的软件代码按 MIT License 发布。上游项目中的 3D 模型和媒体资源标注为 CC BY-NC-SA 4.0，包含非商业限制；如果你计划商业销售硬件，请重新设计外壳和视觉素材，并自行确认商标、外观和供应链合规。
 
 ## 当前功能
 
@@ -17,7 +23,7 @@
 ## 工程结构
 
 ```text
-E:\desktop\clawd mochi
+clawd-mochi/
 ├── CMakeLists.txt
 ├── sdkconfig.defaults
 ├── main
@@ -173,7 +179,7 @@ LCD Y offset
 推荐在 ESP-IDF PowerShell 终端中执行：
 
 ```powershell
-cd "E:\desktop\clawd mochi"
+cd "<project-dir>"
 idf.py set-target esp32s3
 idf.py build
 ```
@@ -187,9 +193,9 @@ tools\idf_mochi.cmd build
 如果普通 PowerShell 没加载 ESP-IDF 环境，可先运行：
 
 ```powershell
-cd "E:\Espressif\frameworks\esp-idf-v5.5.2"
+cd "<esp-idf-dir>"
 .\export.ps1
-cd "E:\desktop\clawd mochi"
+cd "<project-dir>"
 idf.py build
 ```
 
@@ -201,10 +207,10 @@ idf.py build
 idf.py -p COMx flash monitor
 ```
 
-本次已验证生成固件：
+构建成功后固件位于：
 
 ```text
-E:\desktop\clawd mochi\build\clawd_mochi_s3.bin
+build/clawd_mochi_s3.bin
 ```
 
 ## 已知限制
@@ -368,5 +374,5 @@ py -3 tools\package_mochi_bridge.py --version v1.0.0
 原始 Arduino 工程已保留在：
 
 ```text
-E:\desktop\clawd mochi\upstream
+upstream/
 ```

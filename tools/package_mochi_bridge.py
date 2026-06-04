@@ -123,7 +123,7 @@ install_windows.cmd
 如果 `clawd-mochi.local` 不可用，可以在命令行里指定屏幕显示的 IP：
 
 ```powershell
-install_windows.cmd 172.20.10.2
+install_windows.cmd 192.168.1.123
 ```
 
 ## macOS

@@ -3,7 +3,7 @@
     安装、检查、测试或卸载 Clawd Mochi 的 Codex / Claude Code 全局桥接器。
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHost 172.20.10.2
+    powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHost clawd-mochi.local
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action status
