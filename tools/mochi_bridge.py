@@ -299,6 +299,25 @@ async def send_pet_ble_respecting_mode_async(mood: str, text: str, timeout: floa
     return {"ok": 1, "transport": "ble", "device": device.address, "bridge_mode": mode}
 
 
+async def hold_ble_async(seconds: float, timeout: float) -> dict:
+    """保持 BLE 连接一段时间，用于区分短连接策略和真实掉线。"""
+    try:
+        from bleak import BleakClient
+    except ImportError as exc:
+        raise RuntimeError("bleak not installed") from exc
+
+    device = await find_ble_device(timeout)
+    if device is None:
+        raise TimeoutError("BLE device not found")
+
+    hold_seconds = max(1.0, min(seconds, 300.0))
+    async with BleakClient(device, timeout=timeout) as client:
+        raw = await client.read_gatt_char(BLE_MODE_UUID)
+        mode = normalize_bridge_mode(bytes(raw).decode("ascii", errors="ignore"))
+        await asyncio.sleep(hold_seconds)
+    return {"ok": 1, "transport": "ble", "device": device.address, "bridge_mode": mode, "held_seconds": hold_seconds}
+
+
 def send_pet_ble(mood: str, text: str, timeout: float) -> dict:
     """同步封装 BLE 发送，便于 hook 直接调用。"""
     return asyncio.run(send_pet_ble_async(mood, text, timeout))
@@ -312,6 +331,11 @@ def send_pet_ble_respecting_mode(mood: str, text: str, timeout: float) -> dict:
 def read_mode_ble(timeout: float) -> tuple[str, str]:
     """同步读取 BLE 桥接模式。"""
     return asyncio.run(read_mode_ble_async(timeout))
+
+
+def hold_ble(seconds: float, timeout: float) -> dict:
+    """同步封装 BLE 保持连接诊断。"""
+    return asyncio.run(hold_ble_async(seconds, timeout))
 
 
 def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float) -> tuple[str, dict]:
@@ -397,6 +421,7 @@ def main() -> int:
     parser.add_argument("--set-host", help="save ESP32 LAN address for later commands")
     parser.add_argument("--demo", action="store_true", help="send a short status demo")
     parser.add_argument("--ping", action="store_true", help="send a small ping event")
+    parser.add_argument("--hold", type=float, help="hold BLE connection for N seconds for diagnostics")
     parser.add_argument("--timeout", type=float, default=3.0, help="BLE/HTTP timeout seconds")
     args = parser.parse_args()
 
@@ -412,6 +437,10 @@ def main() -> int:
         text = text or "PING"
 
     try:
+        if args.hold is not None:
+            result = hold_ble(args.hold, args.timeout)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
         if args.demo:
             run_demo(args.host, args.timeout)
             return 0

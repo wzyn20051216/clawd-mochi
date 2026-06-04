@@ -32,6 +32,22 @@ constexpr const char *kTag = "mochi_ble";
 constexpr const char *kDeviceName = "Clawd Mochi";
 constexpr size_t kMaxPayloadLen = 192;
 
+const char *disconnect_reason_text(int reason)
+{
+    switch (reason) {
+    case BLE_HS_HCI_ERR(BLE_ERR_REM_USER_CONN_TERM):
+        return "peer closed";
+    case BLE_HS_HCI_ERR(BLE_ERR_CONN_TERM_LOCAL):
+        return "local closed";
+    case BLE_HS_HCI_ERR(BLE_ERR_CONN_SPVN_TMO):
+        return "supervision timeout";
+    case BLE_HS_HCI_ERR(BLE_ERR_CONN_ESTABLISHMENT):
+        return "establish failed";
+    default:
+        return "other";
+    }
+}
+
 /**
  * @brief UUID 字节序按 BLE little-endian 填写。
  *
@@ -298,8 +314,9 @@ void start_advertising()
                                              }
                                              return 0;
                                          case BLE_GAP_EVENT_DISCONNECT:
-                                             ESP_LOGI(kTag, "central disconnected: reason=%d",
-                                                      event->disconnect.reason);
+                                             ESP_LOGI(kTag, "central disconnected: reason=%d (%s)",
+                                                      event->disconnect.reason,
+                                                      disconnect_reason_text(event->disconnect.reason));
                                              schedule_advertising();
                                              return 0;
                                          case BLE_GAP_EVENT_ADV_COMPLETE:
