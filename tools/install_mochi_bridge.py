@@ -70,15 +70,46 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def hook_command(python_bin: str, event_path: Path) -> str:
-    """生成适合当前系统 shell 执行的 hook 命令。"""
+def quote_windows_bash_arg(value: str) -> str:
+    """生成 Windows 下 Git Bash 可执行的参数。"""
+    normalized = value.replace("\\", "/")
+    return f'"{normalized.replace(chr(34), chr(92) + chr(34))}"'
+
+
+def quote_powershell_arg(value: str) -> str:
+    """生成 PowerShell 可执行的参数。"""
+    normalized = value.replace("\\", "/")
+    escaped = normalized.replace("`", "``").replace("$", "`$").replace('"', '`"')
+    return f'"{escaped}"'
+
+
+def claude_hook_command(python_bin: str, event_path: Path) -> str:
+    """生成 Claude Code hook 命令；Windows 版 Claude 通常经 Git Bash 执行。"""
+    return claude_event_hook_command(python_bin, event_path, None)
+
+
+def codex_hook_command(python_bin: str, event_path: Path) -> str:
+    """生成 Codex hook 命令；Windows 版 Codex 通常经 PowerShell 执行。"""
+    return codex_event_hook_command(python_bin, event_path, None)
+
+
+def claude_event_hook_command(python_bin: str, event_path: Path, event: str | None) -> str:
+    """生成单个 Claude hook 命令。"""
     parts = [python_bin, str(event_path), "--timeout", "5"]
+    if event:
+        parts.extend(["--event", event])
     if os.name == "nt":
-        quoted = []
-        for part in parts:
-            value = part.replace("\\", "/")
-            quoted.append(f'"{value.replace(chr(34), chr(92) + chr(34))}"')
-        return " ".join(quoted)
+        return " ".join(quote_windows_bash_arg(part) for part in parts)
+    return shlex.join(parts)
+
+
+def codex_event_hook_command(python_bin: str, event_path: Path, event: str | None) -> str:
+    """生成单个 Codex hook 命令。"""
+    parts = [python_bin, str(event_path), "--timeout", "5"]
+    if event:
+        parts.extend(["--event", event])
+    if os.name == "nt":
+        return "& " + " ".join(quote_powershell_arg(part) for part in parts)
     return shlex.join(parts)
 
 
@@ -168,23 +199,38 @@ def ensure_ble_dependency(python_bin: str) -> bool:
     return False
 
 
-def install_hooks(install_dir: Path, python_bin: str) -> str:
+def write_hooks_config(config_path: Path, command_for_event) -> None:
+    """向单个配置文件写入 Mochi hook。"""
+    backup_file(config_path)
+    data = read_json(config_path)
+    hooks = remove_mochi_hooks(data.get("hooks"))
+    for event in EVENTS:
+        command = command_for_event(event)
+        blocks = hooks.get(event, [])
+        if not isinstance(blocks, list):
+            blocks = []
+        blocks.append(mochi_matcher_block(command))
+        hooks[event] = blocks
+    data["hooks"] = hooks
+    write_json(config_path, data)
+
+
+def install_hooks(install_dir: Path, python_bin: str) -> dict[str, str]:
     """写入 Codex 和 Claude Code 全局 hook。"""
     event_path = install_dir / "mochi_event.py"
-    command = hook_command(python_bin, event_path)
-    for config_path in (codex_home() / "hooks.json", claude_home() / "settings.json"):
-        backup_file(config_path)
-        data = read_json(config_path)
-        hooks = remove_mochi_hooks(data.get("hooks"))
-        for event in EVENTS:
-            blocks = hooks.get(event, [])
-            if not isinstance(blocks, list):
-                blocks = []
-            blocks.append(mochi_matcher_block(command))
-            hooks[event] = blocks
-        data["hooks"] = hooks
-        write_json(config_path, data)
-    return command
+    commands = {
+        "Codex": codex_event_hook_command(python_bin, event_path, "SessionStart"),
+        "Claude": claude_event_hook_command(python_bin, event_path, "SessionStart"),
+    }
+    write_hooks_config(
+        codex_home() / "hooks.json",
+        lambda event: codex_event_hook_command(python_bin, event_path, event),
+    )
+    write_hooks_config(
+        claude_home() / "settings.json",
+        lambda event: claude_event_hook_command(python_bin, event_path, event),
+    )
+    return commands
 
 
 def uninstall_hooks() -> None:
@@ -269,11 +315,12 @@ def main() -> int:
     if args.action == "install":
         install_bridge_files(install_dir, args.host)
         ensure_ble_dependency(args.python)
-        command = install_hooks(install_dir, args.python)
+        commands = install_hooks(install_dir, args.python)
         stop_daemon(install_dir, args.python)
         start_daemon(install_dir, args.python, args.host)
         info("Global bridge installed.")
-        info(f"Hook command: {command}")
+        info(f"Codex hook command: {commands['Codex']}")
+        info(f"Claude hook command: {commands['Claude']}")
         bridge_status(install_dir)
         if not args.no_test:
             test_bridge(install_dir, args.python)

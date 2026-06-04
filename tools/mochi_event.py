@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -51,11 +53,32 @@ def log_hook(message: str) -> None:
         pass
 
 
-def read_event() -> dict[str, Any]:
-    """读取 hook stdin；没有输入时返回空事件，便于手动测试。"""
-    raw = sys.stdin.read().strip()
+def read_stdin_text(timeout: float = 0.2) -> str:
+    """限时读取 hook stdin，避免 Codex/PowerShell 管道不关闭时卡住。"""
+    if sys.stdin.isatty():
+        return ""
+
+    result: queue.Queue[str] = queue.Queue(maxsize=1)
+
+    def reader() -> None:
+        try:
+            result.put_nowait(sys.stdin.read())
+        except Exception:
+            result.put_nowait("")
+
+    thread = threading.Thread(target=reader, name="mochi_stdin", daemon=True)
+    thread.start()
+    try:
+        return result.get(timeout=timeout).strip()
+    except queue.Empty:
+        return ""
+
+
+def read_event(default_event: str | None = None) -> dict[str, Any]:
+    """读取 hook stdin；读不到时使用命令行事件名兜底。"""
+    raw = read_stdin_text()
     if not raw:
-        return {}
+        return {"hook_event_name": default_event} if default_event else {}
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -156,7 +179,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout seconds")
     args = parser.parse_args()
 
-    data = {"hook_event_name": args.event} if args.event else read_event()
+    data = read_event(args.event)
 
     mood, text = map_event(data)
     event = str(data.get("hook_event_name") or data.get("event") or "manual")

@@ -80,10 +80,11 @@ function Ensure-ObjectProperty {
 }
 
 function New-MochiHooks {
-    param([string]$Command)
+    param([scriptblock]$CommandFactory)
 
     $hooks = [ordered]@{}
     foreach ($event in $Events) {
+        $command = & $CommandFactory $event
         $hooks[$event] = @(
             [ordered]@{
                 matcher = ""
@@ -164,8 +165,17 @@ function Install-BleDependency {
 
 function Install-GlobalHooks {
     $eventPath = (Join-Path $InstallDir "mochi_event.py").Replace("\", "/")
-    $command = "py -3 `"$eventPath`" --timeout 5"
-    $newHooks = New-MochiHooks -Command $command
+    $pythonPath = (& py -3 -c "import sys; print(sys.executable)").Trim().Replace("\", "/")
+    $codexFactory = {
+        param([string]$EventName)
+        return "& `"$pythonPath`" `"$eventPath`" `"--timeout`" `"5`" `"--event`" `"$EventName`""
+    }
+    $claudeFactory = {
+        param([string]$EventName)
+        return "`"$pythonPath`" `"$eventPath`" `"--timeout`" `"5`" `"--event`" `"$EventName`""
+    }
+    $codexHooks = New-MochiHooks -CommandFactory $codexFactory
+    $claudeHooks = New-MochiHooks -CommandFactory $claudeFactory
 
     New-Item -ItemType Directory -Force -Path $CodexHome | Out-Null
     New-Item -ItemType Directory -Force -Path $ClaudeHome | Out-Null
@@ -176,7 +186,7 @@ function Install-GlobalHooks {
     Ensure-ObjectProperty -Object $codexData -Name "hooks" -Value ([ordered]@{})
     $codexData.hooks = Remove-MochiHooks -Hooks $codexData.hooks
     foreach ($event in $Events) {
-        $codexData.hooks[$event] = $newHooks[$event]
+        $codexData.hooks[$event] = $codexHooks[$event]
     }
     Save-JsonFile -Path $CodexHooksPath -Data $codexData
 
@@ -184,11 +194,14 @@ function Install-GlobalHooks {
     Ensure-ObjectProperty -Object $claudeData -Name "hooks" -Value ([ordered]@{})
     $claudeData.hooks = Remove-MochiHooks -Hooks $claudeData.hooks
     foreach ($event in $Events) {
-        $claudeData.hooks[$event] = $newHooks[$event]
+        $claudeData.hooks[$event] = $claudeHooks[$event]
     }
     Save-JsonFile -Path $ClaudeSettingsPath -Data $claudeData
 
-    return $command
+    return [ordered]@{
+        Codex = & $codexFactory "SessionStart"
+        Claude = & $claudeFactory "SessionStart"
+    }
 }
 
 function Uninstall-GlobalHooks {
@@ -274,7 +287,8 @@ switch ($Action) {
         Stop-MochiDaemon
         Start-MochiDaemon
         Write-Info "Global bridge installed."
-        Write-Info "Hook command: $command"
+        Write-Info "Codex hook command: $($command.Codex)"
+        Write-Info "Claude hook command: $($command.Claude)"
         Show-Status
         if (-not $NoTest) {
             Test-MochiBridge
