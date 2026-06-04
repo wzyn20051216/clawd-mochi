@@ -4,6 +4,8 @@
 
 当前默认屏幕已切到 **ST7735 1.8 寸 128x160**，后续 1.54 寸 ST7789 240x240 到货后可在 `menuconfig` 中切回。
 
+面向最终用户的安装、配置和使用说明见：[Clawd Mochi 用户使用说明书](docs/Clawd_Mochi_用户使用说明书.md)。
+
 ## 当前功能
 
 - ESP32-S3 AP+STA 双模式：保留热点 `ClaWD-Mochi`，也可连接你的正常 WiFi
