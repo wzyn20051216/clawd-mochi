@@ -312,10 +312,22 @@ async def hold_ble_async(seconds: float, timeout: float) -> dict:
 
     hold_seconds = max(1.0, min(seconds, 300.0))
     async with BleakClient(device, timeout=timeout) as client:
-        raw = await client.read_gatt_char(BLE_MODE_UUID)
-        mode = normalize_bridge_mode(bytes(raw).decode("ascii", errors="ignore"))
-        await asyncio.sleep(hold_seconds)
-    return {"ok": 1, "transport": "ble", "device": device.address, "bridge_mode": mode, "held_seconds": hold_seconds}
+        deadline = time.monotonic() + hold_seconds
+        reads = 0
+        mode = "auto"
+        while time.monotonic() < deadline:
+            raw = await client.read_gatt_char(BLE_MODE_UUID)
+            mode = normalize_bridge_mode(bytes(raw).decode("ascii", errors="ignore"))
+            reads += 1
+            await asyncio.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+    return {
+        "ok": 1,
+        "transport": "ble",
+        "device": device.address,
+        "bridge_mode": mode,
+        "held_seconds": hold_seconds,
+        "reads": reads,
+    }
 
 
 def send_pet_ble(mood: str, text: str, timeout: float) -> dict:

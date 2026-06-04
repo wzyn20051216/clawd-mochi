@@ -48,6 +48,12 @@ const char *disconnect_reason_text(int reason)
     }
 }
 
+bool disconnect_reason_is_normal(int reason)
+{
+    return reason == BLE_HS_HCI_ERR(BLE_ERR_REM_USER_CONN_TERM) ||
+           reason == BLE_HS_HCI_ERR(BLE_ERR_CONN_TERM_LOCAL);
+}
+
 /**
  * @brief UUID 字节序按 BLE little-endian 填写。
  *
@@ -314,9 +320,15 @@ void start_advertising()
                                              }
                                              return 0;
                                          case BLE_GAP_EVENT_DISCONNECT:
-                                             ESP_LOGI(kTag, "central disconnected: reason=%d (%s)",
-                                                      event->disconnect.reason,
-                                                      disconnect_reason_text(event->disconnect.reason));
+                                             if (disconnect_reason_is_normal(event->disconnect.reason)) {
+                                                 ESP_LOGI(kTag, "central disconnected normally: reason=%d (%s)",
+                                                          event->disconnect.reason,
+                                                          disconnect_reason_text(event->disconnect.reason));
+                                             } else {
+                                                 ESP_LOGW(kTag, "central disconnected unexpectedly: reason=%d (%s)",
+                                                          event->disconnect.reason,
+                                                          disconnect_reason_text(event->disconnect.reason));
+                                             }
                                              schedule_advertising();
                                              return 0;
                                          case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -471,6 +483,7 @@ esp_err_t ble_bridge_init(BlePetEventCallback pet_callback,
     g_mode_callback = mode_callback;
     g_user_ctx = user_ctx;
 
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
     ESP_RETURN_ON_ERROR(nimble_port_init(), kTag, "nimble init failed");
     ble_npl_event_init(&g_adv_event, advertising_event_cb, nullptr);
     ble_hs_cfg.reset_cb = on_reset;
