@@ -9,11 +9,11 @@
 如果你已经拿到了接好线并烧录好的成品，只需要做这几步：
 
 1. 给 Clawd Mochi 上电。
-2. 手机或电脑连接热点 `ClaWD-Mochi`，密码 `clawd1234`。
-3. 浏览器打开 `http://192.168.4.1`。
-4. 扫描并连接你的正常 WiFi。
-5. 电脑切回正常 WiFi，打开 `http://clawd-mochi.local`。
-6. 如果要联动 Codex / Claude Code，在电脑上运行安装桥接器命令：
+2. 如果只想联动 Codex / Claude Code，电脑保持正常联网，直接运行安装桥接器命令。
+3. 如果还要打开网页控制或配网，手机或电脑连接热点 `ClaWD-Mochi`，密码 `clawd1234`。
+4. 浏览器打开 `http://192.168.4.1`。
+5. 扫描并连接你的正常 WiFi。
+6. 电脑切回正常 WiFi，打开 `http://clawd-mochi.local`。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHost clawd-mochi.local
@@ -32,7 +32,7 @@ Clawd Mochi 是一个 ESP32-S3 桌面小宠物。它有一块小屏幕，可以�
 - ST7789 1.54 寸 240x240 屏幕，已保留配置，后续可切换
 - 亚博智能 / CI1302 离线 AI 语音交互模块
 - ESP-IDF 固件工程
-- 电脑端 Python 桥接器
+- 电脑端 Python 桥接器，默认蓝牙优先、WiFi 备用
 
 ## 2. 你需要准备什么
 
@@ -53,7 +53,7 @@ Clawd Mochi 是一个 ESP32-S3 桌面小宠物。它有一块小屏幕，可以�
 | --- | --- |
 | Windows 10/11、macOS 或 Linux | 固件烧录和电脑端桥接均可使用；Windows 有 PowerShell 脚本，macOS/Linux 用 Python 安装器 |
 | ESP-IDF 5.5.x | 编译和烧录 ESP32-S3 固件 |
-| Python 3 | 运行电脑端桥接器 |
+| Python 3 | 运行电脑端桥接器，安装器会尝试安装 BLE 依赖 `bleak` |
 | VS Code + ESP-IDF 插件 | 推荐开发环境 |
 | Codex / Claude Code | 可选，用于 AI 桌宠联动 |
 
@@ -296,27 +296,27 @@ docs\Clawd_Mochi_命令词播报词协议列表V3_中文.xlsx
 | 任务失败 | 生气并播报失败 |
 | 等待下一次任务 | 普通眨眼 |
 
-### 8.1 确认 ESP32 已在局域网
+### 8.1 测试桥接通道
 
-先确保 ESP32 已经连接你的正常 WiFi，并且电脑也在同一个 WiFi。
+电脑端桥接器默认优先使用 BLE 蓝牙。蓝牙可用时，电脑和 ESP32 不需要在同一个 WiFi；蓝牙不可用时，桥接器会自动回退到 WiFi。
 
 推荐测试：
 
 Windows：
 
 ```powershell
-py -3 tools\mochi_bridge.py --ping --host clawd-mochi.local
+py -3 tools\mochi_bridge.py --ping
 ```
 
 macOS / Linux：
 
 ```bash
-python3 tools/mochi_bridge.py --ping --host clawd-mochi.local
+python3 tools/mochi_bridge.py --ping
 ```
 
-如果成功，屏幕会有反应。
+如果成功，屏幕会有反应，命令行返回里通常能看到 `transport: ble`，表示当前走的是蓝牙。
 
-如果失败，可以使用屏幕上显示的 IP：
+如果蓝牙不可用，但 ESP32 已经连上你的正常 WiFi，可以指定网页上或屏幕上显示的地址：
 
 Windows：
 
@@ -347,12 +347,13 @@ python3 tools/install_mochi_bridge.py --host clawd-mochi.local
 安装脚本会自动完成：
 
 - 复制桥接器到用户目录下的 `.codex/mochi-bridge`
+- 尝试安装 BLE 依赖 `bleak`
 - 保存 ESP32 地址
 - 写入 Codex 全局 hook
 - 写入 Claude Code 全局 hook
 - 发送测试事件
 
-安装后，正常打开 Codex 或 Claude Code 即可。之后 AI 工作时，桌宠会自动同步状态。
+安装后，正常打开 Codex 或 Claude Code 即可。之后 AI 工作时，桌宠会自动同步状态。蓝牙失败时会自动走 WiFi 备用通道。
 
 ### 8.3 常用维护命令
 
@@ -468,7 +469,7 @@ ST7735 默认值是：
 
 ### 电脑连 ESP32 热点后没有外网
 
-这是正常现象。热点 `ClaWD-Mochi` 只是配网和备用控制用。完成配网后，请让 ESP32 和电脑都连接同一个正常 WiFi，这样电脑就有外网，桌宠也能接收 AI 状态。
+这是正常现象。热点 `ClaWD-Mochi` 只是配网和备用控制用。AI 联动默认优先走 BLE 蓝牙，不需要电脑连 ESP32 热点；如果要使用网页、画板或 WiFi 备用通道，再让 ESP32 和电脑连接同一个正常 WiFi。
 
 ### 打不开 `clawd-mochi.local`
 
@@ -494,21 +495,34 @@ http://192.168.1.123
 
 按顺序检查：
 
-1. ESP32 和电脑是否在同一个 WiFi。
-2. 浏览器能否打开 `http://clawd-mochi.local`。
+1. ESP32 是否已经开机，网页“状态”里是否显示“蓝牙桥接：已开启”。
+2. 电脑蓝牙是否打开，距离是否太远。
 3. 手动 ping 是否成功：
 
 ```powershell
+py -3 tools\mochi_bridge.py --ping
+```
+
+4. 如果提示缺少 `bleak`，重新运行安装器，或手动执行：
+
+```powershell
+py -3 -m pip install --user bleak
+```
+
+5. 如果只想测试 WiFi 备用通道，请确认 ESP32 和电脑在同一个 WiFi，然后执行：
+
+```powershell
+$env:MOCHI_BLE="0"
 py -3 tools\mochi_bridge.py --ping --host clawd-mochi.local
 ```
 
-4. 查看 hook 安装状态：
+6. 查看 hook 安装状态：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -Action status
 ```
 
-5. 重新安装桥接器：
+7. 重新安装桥接器：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\install_mochi_bridge.ps1 -MochiHost clawd-mochi.local

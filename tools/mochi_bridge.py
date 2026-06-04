@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import socket
@@ -26,6 +27,10 @@ CONFIG_PATH = Path(__file__).with_name(".mochi_host")
 DEFAULT_HOST = "192.168.4.1"
 MDNS_HOST = "clawd-mochi.local"
 MDNS_GROUP = ("224.0.0.251", 5353)
+BLE_DEVICE_NAME = "Clawd Mochi"
+BLE_SERVICE_UUID = "6d6f6368-692d-7065-742d-627269646765"
+BLE_STATUS_UUID = "6d6f6368-692d-7065-742d-737461747573"
+BLE_DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 
 
 MOOD_ALIASES = {
@@ -53,6 +58,11 @@ def normalize_mood(mood: str) -> str:
     """把常见英文状态词归一化为固件支持的 mood。"""
     key = mood.strip().lower()
     return MOOD_ALIASES.get(key, key or "normal")
+
+
+def ble_enabled() -> bool:
+    """判断电脑端是否允许优先尝试 BLE。"""
+    return os.environ.get("MOCHI_BLE", "1").strip().lower() not in BLE_DISABLED_VALUES
 
 
 def load_saved_host() -> str | None:
@@ -173,8 +183,73 @@ def send_pet(host: str, mood: str, text: str, timeout: float) -> dict:
         return {"raw": body}
 
 
+def compact_ble_text(text: str, limit: int = 17) -> str:
+    """把 BLE 低延迟载荷压到默认 MTU 能稳定写入的长度。"""
+    ascii_text = text.encode("ascii", errors="ignore").decode("ascii")
+    cleaned = " ".join(ascii_text.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 3] + "..."
+
+
+def ble_payload(mood: str, text: str) -> bytes:
+    """生成固件支持的短 BLE 状态载荷。"""
+    codes = {
+        "normal": "N",
+        "happy": "H",
+        "thinking": "T",
+        "error": "E",
+        "surprise": "S",
+        "sleepy": "P",
+        "love": "L",
+        "wink": "W",
+        "look": "K",
+    }
+    normalized = normalize_mood(mood)
+    code = codes.get(normalized, "N")
+    return f"!{code}{compact_ble_text(text)}".encode("ascii", errors="ignore")
+
+
+async def send_pet_ble_async(mood: str, text: str, timeout: float) -> dict:
+    """通过 BLE GATT 写入桌宠状态。"""
+    try:
+        from bleak import BleakClient, BleakScanner
+    except ImportError as exc:
+        raise RuntimeError("bleak not installed") from exc
+
+    scan_timeout = max(0.6, min(timeout, 3.0))
+    device = await BleakScanner.find_device_by_filter(
+        lambda dev, adv: (
+            (dev.name or "") == BLE_DEVICE_NAME
+            or BLE_SERVICE_UUID.lower() in {uuid.lower() for uuid in (adv.service_uuids or [])}
+        ),
+        timeout=scan_timeout,
+    )
+    if device is None:
+        raise TimeoutError("BLE device not found")
+
+    async with BleakClient(device, timeout=timeout) as client:
+        await client.write_gatt_char(BLE_STATUS_UUID, ble_payload(mood, text), response=False)
+    return {"ok": 1, "transport": "ble", "device": device.address}
+
+
+def send_pet_ble(mood: str, text: str, timeout: float) -> dict:
+    """同步封装 BLE 发送，便于 hook 直接调用。"""
+    return asyncio.run(send_pet_ble_async(mood, text, timeout))
+
+
 def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float) -> tuple[str, dict]:
-    """按显式 host、保存 host、mDNS、热点地址依次发送桌宠事件。"""
+    """优先 BLE，失败后按显式 host、保存 host、mDNS、热点地址依次发送。"""
+    if ble_enabled():
+        try:
+            return "BLE", send_pet_ble(mood, text, timeout)
+        except (RuntimeError, TimeoutError, OSError, asyncio.TimeoutError) as exc:
+            last_ble_error: BaseException | None = exc
+        except Exception as exc:
+            last_ble_error = exc
+    else:
+        last_ble_error = None
+
     last_error: BaseException | None = None
     for host in candidate_hosts(host_arg):
         try:
@@ -183,10 +258,12 @@ def send_pet_auto(host_arg: str | None, mood: str, text: str, timeout: float) ->
             last_error = exc
     if last_error:
         raise last_error
+    if last_ble_error:
+        raise last_ble_error
     raise urllib.error.URLError("no host candidate")
 
 
-def run_demo(host: str, timeout: float) -> None:
+def run_demo(host_arg: str | None, timeout: float) -> None:
     """依次发送几种常用状态，用于快速确认桌宠桥接可用。"""
     steps = [
         ("happy", "LAN OK"),
@@ -197,7 +274,7 @@ def run_demo(host: str, timeout: float) -> None:
         ("normal", ""),
     ]
     for mood, text in steps:
-        result = send_pet(host, mood, text, timeout)
+        host, result = send_pet_auto(host_arg, mood, text, timeout)
         print(json.dumps({"mood": mood, "result": result}, ensure_ascii=False))
         time.sleep(0.8)
 
@@ -212,7 +289,7 @@ def main() -> int:
     parser.add_argument("--set-host", help="save ESP32 LAN address for later commands")
     parser.add_argument("--demo", action="store_true", help="send a short status demo")
     parser.add_argument("--ping", action="store_true", help="send a small ping event")
-    parser.add_argument("--timeout", type=float, default=3.0, help="HTTP timeout seconds")
+    parser.add_argument("--timeout", type=float, default=3.0, help="BLE/HTTP timeout seconds")
     args = parser.parse_args()
 
     if args.set_host:
@@ -228,14 +305,13 @@ def main() -> int:
 
     try:
         if args.demo:
-            host = resolve_host(args.host)
-            run_demo(host, args.timeout)
+            run_demo(args.host, args.timeout)
             return 0
         host, result = send_pet_auto(args.host, mood, text, args.timeout)
-    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+    except (TimeoutError, socket.timeout, urllib.error.URLError, OSError, RuntimeError, asyncio.TimeoutError) as exc:
         print(f"发送失败：{exc}", file=sys.stderr)
         print(f"已尝试 host：{', '.join(candidate_hosts(args.host))}", file=sys.stderr)
-        print("请确认电脑和 ESP32 在同一局域网，或先连接热点 ClaWD-Mochi 后访问 http://192.168.4.1。", file=sys.stderr)
+        print("请确认 ESP32 已开机、电脑蓝牙已打开；若走 WiFi 备用通道，请确认电脑和 ESP32 在同一局域网，或连接热点 ClaWD-Mochi 后访问 http://192.168.4.1。", file=sys.stderr)
         return 1
 
     print(json.dumps(result, ensure_ascii=False))

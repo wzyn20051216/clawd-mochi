@@ -146,6 +146,22 @@ function Install-BridgeFiles {
     }
 }
 
+function Install-BleDependency {
+    py -3 -c "import bleak" *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info "BLE dependency: bleak already available."
+        return
+    }
+
+    Write-Info "BLE dependency: installing bleak for Bluetooth bridge..."
+    py -3 -m pip install --user bleak
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info "BLE dependency: bleak installed."
+    } else {
+        Write-Info "BLE dependency: install failed, WiFi bridge still works."
+    }
+}
+
 function Install-GlobalHooks {
     $eventPath = (Join-Path $InstallDir "mochi_event.py").Replace("\", "/")
     $command = "py -3 `"$eventPath`" --timeout 5"
@@ -225,6 +241,7 @@ function Show-Status {
 switch ($Action) {
     "install" {
         Install-BridgeFiles
+        Install-BleDependency
         $command = Install-GlobalHooks
         Write-Info "Global bridge installed."
         Write-Info "Hook command: $command"

@@ -140,6 +140,30 @@ def install_bridge_files(install_dir: Path, host: str | None) -> None:
         shutil.copy2(source_host_path, host_path)
 
 
+def ensure_ble_dependency(python_bin: str) -> bool:
+    """尽量安装 bleak，让桥接器可优先使用 BLE；失败时仍可走 WiFi。"""
+    check = subprocess.run(
+        [python_bin, "-c", "import bleak"],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if check.returncode == 0:
+        info("BLE dependency: bleak already available.")
+        return True
+
+    info("BLE dependency: installing bleak for Bluetooth bridge...")
+    install = subprocess.run(
+        [python_bin, "-m", "pip", "install", "--user", "bleak"],
+        text=True,
+    )
+    if install.returncode == 0:
+        info("BLE dependency: bleak installed.")
+        return True
+    info("BLE dependency: install failed, WiFi bridge still works.")
+    return False
+
+
 def install_hooks(install_dir: Path, python_bin: str) -> str:
     """写入 Codex 和 Claude Code 全局 hook。"""
     event_path = install_dir / "mochi_event.py"
@@ -207,6 +231,7 @@ def main() -> int:
     install_dir = Path(args.install_dir).expanduser().resolve()
     if args.action == "install":
         install_bridge_files(install_dir, args.host)
+        ensure_ble_dependency(args.python)
         command = install_hooks(install_dir, args.python)
         info("Global bridge installed.")
         info(f"Hook command: {command}")

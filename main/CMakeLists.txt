@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "display.cpp"
+        "ble_bridge.cpp"
         "main.cpp"
         "voice_module.cpp"
     INCLUDE_DIRS
@@ -11,6 +12,7 @@ idf_component_register(
         esp_lcd
         esp_timer
         esp_wifi
+        bt
         mdns
         nvs_flash
 )

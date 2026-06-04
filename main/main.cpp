@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "ble_bridge.hpp"
 #include "display.hpp"
 #include "voice_module.hpp"
 
@@ -97,10 +98,12 @@ enum Face : uint8_t {
 enum UiEventType : uint8_t {
     kUiEventWifiRetryLater = 1,
     kUiEventWifiConnected = 2,
+    kUiEventBlePet = 3,
 };
 
 struct UiEvent {
     UiEventType type;
+    BlePetEvent pet;
 };
 
 MochiDisplay g_display;
@@ -249,7 +252,7 @@ function randomColor(){closeCanvas(false);req('/random?what=color').then(()=>ref
 function night(){closeCanvas(false);req('/night').then(()=>refresh())}
 function day(){closeCanvas(false);req('/day').then(()=>refresh())}
 function factoryReset(){closeCanvas(false);if(confirm('恢复默认设置？'))req('/factory').then(()=>refresh())}
-function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\n语音模块: '+(j.voice_ready?'已连接':(j.voice_enabled?'等待串口':'未启用'))+'\\n语音命令: '+(j.voice_code||'0x0000')+'\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\nWiFi状态: '+(j.reason||'正常')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
+function statusView(){fetch('/state',{cache:'no-store'}).then(r=>r.json()).then(j=>{const s=document.getElementById('stat');s.classList.toggle('on');s.textContent='驱动: '+j.driver+'\\n尺寸: '+j.w+'x'+j.h+'\\n表情: '+j.face+'\\n背景: '+j.bg+'\\n速度: '+labels[j.speed||1]+'\\n活跃度: '+alabels[j.activity||2]+'\\n亮度: '+j.brightness+'%\\n蓝牙桥接: '+(j.ble_ready?'已开启':'未开启')+'\\n语音模块: '+(j.voice_ready?'已连接':(j.voice_enabled?'等待串口':'未启用'))+'\\n语音命令: '+(j.voice_code||'0x0000')+'\\nSTA: '+(j.sta?j.sta:'未连接')+'\\nLAN: '+(j.ip||'-')+'\\nWiFi状态: '+(j.reason||'正常')+'\\n睡眠: '+(j.sleep?'是':'否')+'\\n运行: '+j.uptime+' 秒\\n剩余内存: '+j.heap+' bytes'})}
 function refresh(){fetch('/state',{cache:'no-store'}).then(applyState)}
 function scanWifi(){const n=document.getElementById('nets');n.innerHTML='<option>扫描中...</option>';fetch('/wifi/scan',{cache:'no-store'}).then(r=>r.json()).then(j=>{n.innerHTML='';(j.nets||[]).forEach(x=>{const o=document.createElement('option');o.value=x.ssid;o.textContent=x.ssid+' ('+x.rssi+'dBm)';n.appendChild(o)});if(!n.options.length)n.innerHTML='<option value="">没扫到</option>'})}
 function msg(t){const s=document.getElementById('wifiMsg');s.classList.add('on');s.innerHTML=t}
@@ -428,6 +431,7 @@ void draw_sleepy_eyes(uint8_t z_phase);
 void anim_wake_up();
 std::string sta_ip_text();
 void task_restore_normal_face_once(void *);
+void handle_pet_status(const std::string &mood, const std::string &text);
 
 void apply_default_settings()
 {
@@ -1091,9 +1095,26 @@ void post_ui_event(UiEventType type)
     if (g_ui_event_queue == nullptr) {
         return;
     }
-    const UiEvent event{type};
+    UiEvent event{};
+    event.type = type;
     if (xQueueSend(g_ui_event_queue, &event, 0) != pdPASS) {
         ESP_LOGW(kTag, "ui event queue full, drop type=%u", static_cast<unsigned>(type));
+    }
+}
+
+/**
+ * @brief BLE 收到桌宠状态后只入队，不在 NimBLE 回调里刷屏或播报。
+ */
+void handle_ble_pet_event(const BlePetEvent &pet, void *)
+{
+    if (g_ui_event_queue == nullptr) {
+        return;
+    }
+    UiEvent event{};
+    event.type = kUiEventBlePet;
+    event.pet = pet;
+    if (xQueueSend(g_ui_event_queue, &event, 0) != pdPASS) {
+        ESP_LOGW(kTag, "ui event queue full, drop ble pet mood=%s", pet.mood);
     }
 }
 
@@ -1354,6 +1375,9 @@ void task_ui_event(void *)
             break;
         case kUiEventWifiConnected:
             show_wifi_connected_feedback();
+            break;
+        case kUiEventBlePet:
+            handle_pet_status(event.pet.mood, event.pet.text);
             break;
         default:
             break;
@@ -1682,6 +1706,9 @@ void draw_wifi_info()
     g_display.setTextSize(1);
     g_display.setCursor(12, 112);
     g_display.print(g_sta_connected ? ip : "fallback AP mode");
+    g_display.setTextColor(g_green);
+    g_display.setCursor(12, 130);
+    g_display.print(ble_bridge_is_ready() ? "BLE bridge ready" : "BLE bridge starting");
     g_display.flush();
 }
 
@@ -1978,14 +2005,19 @@ void voice_say_pet_status(const std::string &mood, const std::string &text)
     }
 }
 
-esp_err_t route_pet(httpd_req_t *req)
+void handle_pet_status(const std::string &mood, const std::string &text)
 {
     note_activity();
-    const std::string mood = query_value(req, "mood", 64);
-    const std::string text = query_value(req, "text", 256);
     mark_manual_animation();
     draw_pet_notice(mood_to_face(mood), text);
     voice_say_pet_status(mood, text);
+}
+
+esp_err_t route_pet(httpd_req_t *req)
+{
+    const std::string mood = query_value(req, "mood", 64);
+    const std::string text = query_value(req, "text", 256);
+    handle_pet_status(mood, text);
     send_json(req);
     return ESP_OK;
 }
@@ -2293,33 +2325,37 @@ esp_err_t route_state(httpd_req_t *req)
     const VoiceModuleStatus voice = voice_module_get_status();
     char voice_code[7] = {};
     std::snprintf(voice_code, sizeof(voice_code), "0x%04X", static_cast<unsigned>(voice.last_code));
-    char json[768];
-    std::snprintf(json, sizeof(json),
-                  "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"voice_enabled\":%s,\"voice_ready\":%s,\"voice_code\":\"%s\",\"voice_frames\":%u,\"voice_bad\":%u,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"mdns\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
-                  static_cast<unsigned>(g_current_view),
-                  static_cast<unsigned>(g_current_face),
-                  g_busy ? "true" : "false",
-                  g_term_mode ? "true" : "false",
-                  g_backlight_on ? "true" : "false",
-                  g_sleeping ? "true" : "false",
-                  voice.enabled ? "true" : "false",
-                  voice.ready ? "true" : "false",
-                  voice_code,
-                  static_cast<unsigned>(voice.frame_count),
-                  static_cast<unsigned>(voice.bad_frame_count),
-                  static_cast<unsigned>(g_anim_speed),
-                  static_cast<unsigned>(g_idle_activity),
-                  static_cast<unsigned>(g_backlight_brightness),
-                  rgb888_to_hex(g_bg_rgb).c_str(),
-                  json_escape_utf8(sta_ssid(), 64).c_str(),
-                  sta_ip_text().c_str(),
-                  g_sta_connected ? mdns_host_text().c_str() : "",
-                  g_sta_connected ? "正常" : json_escape_utf8(sta_reason_text(g_sta_last_disconnect_reason), 80).c_str(),
-                  static_cast<long long>(esp_timer_get_time() / 1000000),
-                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
-                  g_display.width(),
-                  g_display.height(),
-                  g_display.driverName());
+    char json[1024];
+    const int written = std::snprintf(json, sizeof(json),
+                                      "{\"view\":%u,\"face\":%u,\"busy\":%s,\"term\":%s,\"bl\":%s,\"sleep\":%s,\"voice_enabled\":%s,\"voice_ready\":%s,\"ble_ready\":%s,\"voice_code\":\"%s\",\"voice_frames\":%u,\"voice_bad\":%u,\"speed\":%u,\"activity\":%u,\"brightness\":%u,\"bg\":\"%s\",\"sta\":\"%s\",\"ip\":\"%s\",\"mdns\":\"%s\",\"reason\":\"%s\",\"uptime\":%lld,\"heap\":%u,\"w\":%d,\"h\":%d,\"driver\":\"%s\"}",
+                                      static_cast<unsigned>(g_current_view),
+                                      static_cast<unsigned>(g_current_face),
+                                      g_busy ? "true" : "false",
+                                      g_term_mode ? "true" : "false",
+                                      g_backlight_on ? "true" : "false",
+                                      g_sleeping ? "true" : "false",
+                                      voice.enabled ? "true" : "false",
+                                      voice.ready ? "true" : "false",
+                                      ble_bridge_is_ready() ? "true" : "false",
+                                      voice_code,
+                                      static_cast<unsigned>(voice.frame_count),
+                                      static_cast<unsigned>(voice.bad_frame_count),
+                                      static_cast<unsigned>(g_anim_speed),
+                                      static_cast<unsigned>(g_idle_activity),
+                                      static_cast<unsigned>(g_backlight_brightness),
+                                      rgb888_to_hex(g_bg_rgb).c_str(),
+                                      json_escape_utf8(sta_ssid(), 64).c_str(),
+                                      sta_ip_text().c_str(),
+                                      g_sta_connected ? mdns_host_text().c_str() : "",
+                                      g_sta_connected ? "正常" : json_escape_utf8(sta_reason_text(g_sta_last_disconnect_reason), 80).c_str(),
+                                      static_cast<long long>(esp_timer_get_time() / 1000000),
+                                      static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+                                      g_display.width(),
+                                      g_display.height(),
+                                      g_display.driverName());
+    if (written < 0 || written >= static_cast<int>(sizeof(json))) {
+        ESP_LOGW(kTag, "state json truncated: written=%d", written);
+    }
     send_json(req, json);
     return ESP_OK;
 }
@@ -2540,10 +2576,11 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(start_http_server());
     g_voice_cmd_queue = xQueueCreate(8, sizeof(uint16_t));
     ESP_ERROR_CHECK(g_voice_cmd_queue == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
-    g_ui_event_queue = xQueueCreate(4, sizeof(UiEvent));
+    g_ui_event_queue = xQueueCreate(8, sizeof(UiEvent));
     ESP_ERROR_CHECK(g_ui_event_queue == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
     ESP_ERROR_CHECK(xTaskCreate(task_ui_event, "ui_event", 4096, nullptr, 4, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(task_voice_command, "voice_cmd", 6144, nullptr, 4, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ble_bridge_init(handle_ble_pet_event, nullptr));
     ESP_ERROR_CHECK_WITHOUT_ABORT(voice_module_init(handle_voice_module_code, nullptr));
     note_activity();
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);

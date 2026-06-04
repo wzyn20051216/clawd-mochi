@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import socket
 import sys
-import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -165,7 +163,7 @@ def main() -> int:
     try:
         host, _ = send_pet_auto(args.host, mood, text, args.timeout)
         log_hook(f"{event}: pet {mood} {text} -> {host}")
-    except (TimeoutError, socket.timeout, urllib.error.URLError, OSError) as exc:
+    except Exception as exc:  # noqa: BLE001 - hook 失败不能影响 Codex / Claude 主流程。
         log_hook(f"{event}: pet failed {mood} {text}: {exc}")
         pass
     hook_stdout(data)

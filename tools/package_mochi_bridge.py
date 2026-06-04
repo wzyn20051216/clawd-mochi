@@ -108,9 +108,10 @@ def installer_readme(version: str) -> str:
 ## 使用前确认
 
 1. 桌宠已经开机。
-2. 桌宠已经连接到和电脑相同的 WiFi。
-3. 桌宠网页能用 `http://clawd-mochi.local` 或屏幕显示的 IP 打开。
+2. 电脑蓝牙已打开。蓝牙可用时，电脑和桌宠不需要在同一个 WiFi。
+3. 如果需要 WiFi 备用通道，桌宠网页能用 `http://clawd-mochi.local` 或屏幕显示的 IP 打开。
 4. 电脑已安装 Python 3。Windows 用户通常也可直接使用系统里的 `py -3`。
+5. 安装器会尝试安装 `bleak`，用于 BLE 蓝牙桥接；失败时仍可走 WiFi。
 
 ## Windows
 
@@ -176,7 +177,9 @@ sh uninstall_linux.sh
 
 安装成功后，正常打开 Codex 或 Claude Code 即可。AI 开始思考、调用工具、完成任务或报错时，桌宠会自动变化表情并触发语音模块播报。
 
-本桥接器只在本机写入 Codex / Claude Code 的 hook 配置，并向局域网内的 ESP32 发送状态事件；不会读取或保存 Claude、Codex、OpenAI、Anthropic 的账号密钥。
+桥接器默认优先使用 BLE 蓝牙；蓝牙不可用时自动回退到 WiFi HTTP。临时禁用蓝牙可设置环境变量 `MOCHI_BLE=0`。
+
+本桥接器只在本机写入 Codex / Claude Code 的 hook 配置，并向 ESP32 发送状态事件；不会读取或保存 Claude、Codex、OpenAI、Anthropic 的账号密钥。
 """
 
 

@@ -15,6 +15,7 @@
 ## 当前功能
 
 - ESP32-S3 AP+STA 双模式：保留热点 `ClaWD-Mochi`，也可连接你的正常 WiFi
+- BLE 蓝牙桥接：电脑端桥接器优先用蓝牙发送 Claude/Codex 状态，WiFi 自动备用
 - 浏览器控制页面：热点模式 `http://192.168.4.1`，局域网模式优先使用 `http://clawd-mochi.local`
 - ST7735 128x160 与 ST7789 240x240 双驱动保留
 - normal eyes / squish eyes / Claude Code / canvas 绘图模式
@@ -236,7 +237,14 @@ py -3 tools\mochi_bridge.py thinking "coding..." --host clawd-mochi.local
 py -3 tools\mochi_bridge.py error "build failed" --host clawd-mochi.local
 ```
 
-桥接器也会自动尝试：显式 host、环境变量、mDNS 自动发现、保存的 host、`clawd-mochi.local`、`192.168.4.1`，所以多数情况下可以不再手动输入 IP。
+桥接器默认会优先尝试 BLE 蓝牙，成功时电脑和 ESP32 不需要在同一个局域网。蓝牙不可用、电脑没有安装 `bleak`、或设备距离过远时，会自动回退到 WiFi HTTP：显式 host、环境变量、mDNS 自动发现、保存的 host、`clawd-mochi.local`、`192.168.4.1`。
+
+如需临时禁用 BLE，只走 WiFi：
+
+```powershell
+$env:MOCHI_BLE="0"
+py -3 tools\mochi_bridge.py --ping --host clawd-mochi.local
+```
 
 也可以先设置环境变量，后续省略 `--host`：
 
@@ -270,7 +278,7 @@ py -3 tools\mochi_task.py --name test -- py -3 -m py_compile tools\mochi_bridge.
 
 `mood` 可用：`normal`、`happy`、`thinking`、`error`、`surprise`、`sleepy`、`love`、`wink`、`look`。
 
-当前 LCD 字体仅支持 ASCII，`text` 建议使用短英文或数字。后续接 Claude/Codex 时，推荐由电脑端桥接器保管 API Key，再通过 `/pet` 把状态推送到 ESP32-S3，避免把密钥写进固件。
+当前 LCD 字体仅支持 ASCII，`text` 建议使用短英文或数字。接 Claude/Codex 时，由电脑端桥接器通过 BLE 或 `/pet` 推送状态，API Key 不会写入 ESP32-S3 固件。
 
 ### 真实 Agent 状态桥接
 
@@ -285,7 +293,7 @@ py -3 tools\mochi_task.py --name test -- py -3 -m py_compile tools\mochi_bridge.
 | 工具失败 / 任务失败 | 生气 |
 | 等待下一步 | 普通眨眼 |
 
-推荐使用一键安装脚本。现在优先使用固定 mDNS 地址。
+推荐使用一键安装脚本。安装器会尝试安装 Python BLE 依赖 `bleak`，用于蓝牙优先桥接；安装失败也不会影响 WiFi 模式。
 
 Windows：
 
@@ -305,6 +313,7 @@ sh tools/install_mochi_bridge.sh --host clawd-mochi.local
 
 ```text
 复制桥接器到用户目录下的 .codex/mochi-bridge
+尽量安装 BLE 依赖 bleak
 保存 ESP32 Host
 写入 Codex 全局 hook
 写入 Claude Code 全局 hook
