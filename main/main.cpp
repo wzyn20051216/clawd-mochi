@@ -19,6 +19,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "mdns.h"
 #include "nvs.h"
@@ -113,6 +114,7 @@ uint8_t g_sta_retry_count = 0;
 std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
+QueueHandle_t g_voice_cmd_queue = nullptr;
 
 constexpr char kIndexHtml[] = R"HTML(
 <!doctype html><html lang="zh-CN"><head>
@@ -853,6 +855,16 @@ void set_voice_brightness_delta(int delta)
 
 void handle_voice_module_code(uint16_t code, void *)
 {
+    if (g_voice_cmd_queue == nullptr) {
+        return;
+    }
+    if (xQueueSend(g_voice_cmd_queue, &code, 0) != pdPASS) {
+        ESP_LOGW(kTag, "voice command queue full, drop code=0x%04X", code);
+    }
+}
+
+void process_voice_module_code(uint16_t code)
+{
     ESP_LOGI(kTag, "voice command code=0x%04X", code);
     switch (code) {
     case 0xFF58:
@@ -1031,6 +1043,16 @@ void handle_voice_module_code(uint16_t code, void *)
         draw_voice_notice(kFaceSurprise, text);
         break;
     }
+    }
+}
+
+void task_voice_command(void *)
+{
+    uint16_t code = 0;
+    while (true) {
+        if (xQueueReceive(g_voice_cmd_queue, &code, portMAX_DELAY) == pdTRUE) {
+            process_voice_module_code(code);
+        }
     }
 }
 
@@ -2256,6 +2278,9 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(wifi_init_apsta());
     ESP_ERROR_CHECK(start_mdns_service());
     ESP_ERROR_CHECK(start_http_server());
+    g_voice_cmd_queue = xQueueCreate(8, sizeof(uint16_t));
+    ESP_ERROR_CHECK(g_voice_cmd_queue == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
+    ESP_ERROR_CHECK(xTaskCreate(task_voice_command, "voice_cmd", 6144, nullptr, 4, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK_WITHOUT_ABORT(voice_module_init(handle_voice_module_code, nullptr));
     note_activity();
     xTaskCreate(task_auto_sleep, "auto_sleep", 3072, nullptr, 3, nullptr);

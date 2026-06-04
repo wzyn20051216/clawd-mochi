@@ -128,7 +128,7 @@ menu "Clawd Mochi"
         config MOCHI_VOICE_MODULE_TASK_STACK
             int "Voice module task stack size"
             depends on MOCHI_VOICE_MODULE_ENABLE
-            default 3072
+            default 4096
 
         config MOCHI_VOICE_MODULE_TASK_PRIO
             int "Voice module task priority"
