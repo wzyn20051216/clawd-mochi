@@ -355,6 +355,14 @@ Windows: C:\Users\<你>\.codex\mochi-bridge
 macOS/Linux: ~/.codex/mochi-bridge
 ```
 
+生成面向用户分发的桥接器安装包：
+
+```powershell
+py -3 tools\package_mochi_bridge.py --version v1.0.0
+```
+
+生成结果在 `dist/` 目录，包含 Windows、macOS、Linux 的安装、测试、状态检查和卸载脚本，以及 SHA-256 校验文件。
+
 ## 上游来源
 
 原始 Arduino 工程已保留在：
