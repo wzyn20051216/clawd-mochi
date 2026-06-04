@@ -158,9 +158,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout seconds")
     args = parser.parse_args()
 
-    data = read_event()
-    if args.event:
-        data["hook_event_name"] = args.event
+    data = {"hook_event_name": args.event} if args.event else read_event()
 
     mood, text = map_event(data)
     event = str(data.get("hook_event_name") or data.get("event") or "manual")

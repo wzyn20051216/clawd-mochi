@@ -19,6 +19,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "mdns.h"
 #include "nvs.h"
@@ -93,8 +94,17 @@ enum Face : uint8_t {
     kFaceLook = 8,
 };
 
+enum UiEventType : uint8_t {
+    kUiEventWifiRetryLater = 1,
+};
+
+struct UiEvent {
+    UiEventType type;
+};
+
 MochiDisplay g_display;
 httpd_handle_t g_server = nullptr;
+SemaphoreHandle_t g_display_mutex = nullptr;
 uint16_t g_orange = 0;
 uint16_t g_dark_bg = 0;
 uint16_t g_muted = 0;
@@ -126,7 +136,34 @@ std::string g_term_lines[kTermRows];
 uint8_t g_term_row = 0;
 uint8_t g_term_col = 0;
 QueueHandle_t g_voice_cmd_queue = nullptr;
+QueueHandle_t g_ui_event_queue = nullptr;
 uint32_t g_last_voice_say_ms = 0;
+
+/**
+ * @brief 保护 LCD 帧缓冲和 SPI flush，避免多个任务同时改屏幕。
+ */
+class DisplayLock {
+public:
+    DisplayLock()
+    {
+        if (g_display_mutex != nullptr) {
+            taken_ = xSemaphoreTakeRecursive(g_display_mutex, portMAX_DELAY) == pdTRUE;
+        }
+    }
+
+    ~DisplayLock()
+    {
+        if (taken_) {
+            xSemaphoreGiveRecursive(g_display_mutex);
+        }
+    }
+
+    DisplayLock(const DisplayLock &) = delete;
+    DisplayLock &operator=(const DisplayLock &) = delete;
+
+private:
+    bool taken_ = false;
+};
 
 constexpr char kIndexHtml[] = R"HTML(
 <!doctype html><html lang="zh-CN"><head>
@@ -468,10 +505,11 @@ std::string url_decode(const char *text)
     return out;
 }
 
-std::string query_value(httpd_req_t *req, const char *key, size_t max_len = 4096)
+std::string query_value(httpd_req_t *req, const char *key, size_t max_value_len = 4096)
 {
+    constexpr size_t kMaxQueryLen = 4096;
     const size_t query_len = httpd_req_get_url_query_len(req) + 1;
-    if (query_len <= 1 || query_len > max_len) {
+    if (query_len <= 1 || query_len > kMaxQueryLen) {
         return {};
     }
     std::vector<char> query(query_len);
@@ -482,7 +520,11 @@ std::string query_value(httpd_req_t *req, const char *key, size_t max_len = 4096
     if (httpd_query_key_value(query.data(), key, value, sizeof(value)) != ESP_OK) {
         return {};
     }
-    return url_decode(value);
+    std::string decoded = url_decode(value);
+    if (decoded.size() > max_value_len) {
+        decoded.resize(max_value_len);
+    }
+    return decoded;
 }
 
 void send_json(httpd_req_t *req, const char *json = "{\"ok\":1}")
@@ -493,6 +535,7 @@ void send_json(httpd_req_t *req, const char *json = "{\"ok\":1}")
 
 void set_backlight(bool on)
 {
+    DisplayLock lock;
     g_backlight_on = on;
     g_display.setBacklight(on);
 }
@@ -504,6 +547,7 @@ void set_backlight(bool on)
  */
 void set_brightness(uint8_t percent)
 {
+    DisplayLock lock;
     g_backlight_brightness = std::clamp<uint8_t>(percent, 5, 100);
     if (!g_sleeping) {
         g_awake_brightness = g_backlight_brightness;
@@ -517,6 +561,7 @@ void set_brightness(uint8_t percent)
  */
 void enter_sleep_state()
 {
+    DisplayLock lock;
     if (!g_sleeping && g_backlight_brightness != kSleepBrightness) {
         g_awake_brightness = g_backlight_brightness;
     }
@@ -536,6 +581,7 @@ void enter_sleep_state()
  */
 void wake_from_sleep_if_needed()
 {
+    DisplayLock lock;
     if (!g_sleeping) {
         return;
     }
@@ -557,6 +603,7 @@ void note_activity()
 
 void set_background_rgb(uint32_t rgb)
 {
+    DisplayLock lock;
     g_bg_rgb = rgb & 0xFFFFFF;
     g_anim_bg = rgb888_to_rgb565(g_bg_rgb);
     g_draw_bg = g_anim_bg;
@@ -757,6 +804,7 @@ void draw_side_eye(int16_t glance = 0)
 
 void draw_face(Face face, int16_t ox = 0, bool blink = false)
 {
+    DisplayLock lock;
     g_current_face = face;
     switch (face) {
     case kFaceSquish:
@@ -833,7 +881,7 @@ std::string lcd_ascii_text(const std::string &text, size_t max_len = 24)
     return out;
 }
 
-std::string json_escape_ascii(const std::string &text, size_t max_len = 64)
+std::string json_escape_utf8(const std::string &text, size_t max_len = 128)
 {
     std::string out;
     out.reserve(std::min(text.size(), max_len));
@@ -844,10 +892,18 @@ std::string json_escape_ascii(const std::string &text, size_t max_len = 64)
         if (ch == '\\' || ch == '"') {
             out.push_back('\\');
             out.push_back(static_cast<char>(ch));
-        } else if (ch >= 32 && ch <= 126) {
+        } else if (ch == '\n') {
+            out += "\\n";
+        } else if (ch == '\r') {
+            out += "\\r";
+        } else if (ch == '\t') {
+            out += "\\t";
+        } else if (ch < 32) {
+            char escaped[7] = {};
+            std::snprintf(escaped, sizeof(escaped), "\\u%04X", static_cast<unsigned>(ch));
+            out += escaped;
+        } else {
             out.push_back(static_cast<char>(ch));
-        } else if (!out.empty() && out.back() != ' ') {
-            out.push_back(' ');
         }
     }
     return out;
@@ -855,6 +911,7 @@ std::string json_escape_ascii(const std::string &text, size_t max_len = 64)
 
 void draw_pet_notice(Face face, const std::string &text)
 {
+    DisplayLock lock;
     g_current_view = kViewEyesNormal;
     g_term_mode = false;
     draw_face(face);
@@ -920,6 +977,17 @@ void handle_voice_module_code(uint16_t code, void *)
     }
     if (xQueueSend(g_voice_cmd_queue, &code, 0) != pdPASS) {
         ESP_LOGW(kTag, "voice command queue full, drop code=0x%04X", code);
+    }
+}
+
+void post_ui_event(UiEventType type)
+{
+    if (g_ui_event_queue == nullptr) {
+        return;
+    }
+    const UiEvent event{type};
+    if (xQueueSend(g_ui_event_queue, &event, 0) != pdPASS) {
+        ESP_LOGW(kTag, "ui event queue full, drop type=%u", static_cast<unsigned>(type));
     }
 }
 
@@ -1127,8 +1195,26 @@ void task_voice_command(void *)
     }
 }
 
+void task_ui_event(void *)
+{
+    UiEvent event{};
+    while (true) {
+        if (xQueueReceive(g_ui_event_queue, &event, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        switch (event.type) {
+        case kUiEventWifiRetryLater:
+            draw_pet_notice(kFaceAngry, "WiFi retry later");
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 void draw_code_view()
 {
+    DisplayLock lock;
     g_term_mode = false;
     g_display.fillScreen(g_dark_bg);
     g_display.fillRect(0, 0, g_display.width(), 4, g_orange);
@@ -1191,6 +1277,7 @@ void term_draw_line(uint8_t row)
 
 void term_full_redraw()
 {
+    DisplayLock lock;
     g_display.fillScreen(g_dark_bg);
     term_draw_header();
     for (uint8_t row = 0; row < term_rows(); ++row) {
@@ -1212,6 +1299,7 @@ void term_scroll()
 
 void term_add_char(char c)
 {
+    DisplayLock lock;
     if (c == '\n' || c == '\r') {
         ++g_term_row;
         g_term_col = 0;
@@ -1243,6 +1331,7 @@ void term_add_char(char c)
 
 void anim_normal_eyes()
 {
+    DisplayLock lock;
     g_busy = true;
     mark_manual_animation();
     const int16_t offsets[] = {
@@ -1268,6 +1357,7 @@ void anim_normal_eyes()
 
 void anim_squish_eyes()
 {
+    DisplayLock lock;
     g_busy = true;
     mark_manual_animation();
     for (uint8_t i = 0; i < 3; ++i) {
@@ -1282,6 +1372,7 @@ void anim_squish_eyes()
 
 void anim_wake_up()
 {
+    DisplayLock lock;
     g_busy = true;
     g_current_face = kFaceNormal;
     g_current_view = kViewEyesNormal;
@@ -1304,6 +1395,7 @@ void anim_wake_up()
 
 void anim_logo_reveal()
 {
+    DisplayLock lock;
     g_busy = true;
     mark_manual_animation();
     g_display.fillScreen(g_anim_bg);
@@ -1418,6 +1510,7 @@ const char *sta_reason_text(uint8_t reason)
 
 void draw_wifi_info()
 {
+    DisplayLock lock;
     g_display.fillScreen(g_dark_bg);
     g_display.fillRect(0, 0, g_display.width(), 4, g_orange);
     g_display.setTextColor(kWhite);
@@ -1493,6 +1586,10 @@ void task_idle_face(void *)
     uint8_t cycle = 0;
     while (true) {
         delay_ms(idle_interval_ms());
+        if (!can_idle_animate()) {
+            continue;
+        }
+        DisplayLock lock;
         if (!can_idle_animate()) {
             continue;
         }
@@ -1763,7 +1860,7 @@ esp_err_t route_wifi_scan(httpd_req_t *req)
             json += ",";
         }
         json += "{\"ssid\":\"";
-        json += json_escape_ascii(reinterpret_cast<const char *>(aps[i].ssid), 32);
+        json += json_escape_utf8(reinterpret_cast<const char *>(aps[i].ssid), 64);
         json += "\",\"rssi\":";
         json += std::to_string(aps[i].rssi);
         json += "}";
@@ -1822,7 +1919,7 @@ esp_err_t route_wifi_connect(httpd_req_t *req)
         draw_pet_notice(kFaceAngry, reason);
         voice_say(kVoiceSayWifiFail, 0);
         std::string json = "{\"ok\":0,\"connected\":false,\"reason\":\"";
-        json += json_escape_ascii(reason, 40);
+        json += json_escape_utf8(reason, 80);
         json += "\"}";
         send_json(req, json.c_str());
     }
@@ -1874,6 +1971,7 @@ esp_err_t route_canvas(httpd_req_t *req)
     note_activity();
     const std::string on = query_value(req, "on", 64);
     if (on == "1") {
+        DisplayLock lock;
         g_current_view = kViewDraw;
         g_term_mode = false;
         g_display.fillScreen(g_draw_bg);
@@ -1888,6 +1986,7 @@ esp_err_t route_draw_clear(httpd_req_t *req)
     note_activity();
     const std::string bg = query_value(req, "bg", 128);
     set_background_rgb(hex_to_rgb888(bg.empty() ? "#ff8000" : bg, g_bg_rgb));
+    DisplayLock lock;
     g_current_view = kViewDraw;
     g_term_mode = false;
     g_display.fillScreen(g_draw_bg);
@@ -1911,6 +2010,7 @@ esp_err_t route_draw_stroke(httpd_req_t *req)
     const uint16_t color = hex_to_rgb565(pen);
     const int brush = std::clamp(std::atoi(size_text.empty() ? "3" : size_text.c_str()), 1, 8);
     const int radius = std::max(1, brush / 2);
+    DisplayLock lock;
     g_current_view = kViewDraw;
     int16_t prev_x = -1;
     int16_t prev_y = -1;
@@ -2068,10 +2168,10 @@ esp_err_t route_state(httpd_req_t *req)
                   static_cast<unsigned>(g_idle_activity),
                   static_cast<unsigned>(g_backlight_brightness),
                   rgb888_to_hex(g_bg_rgb).c_str(),
-                  json_escape_ascii(sta_ssid(), 32).c_str(),
+                  json_escape_utf8(sta_ssid(), 64).c_str(),
                   sta_ip_text().c_str(),
                   g_sta_connected ? mdns_host_text().c_str() : "",
-                  g_sta_connected ? "正常" : json_escape_ascii(sta_reason_text(g_sta_last_disconnect_reason), 40).c_str(),
+                  g_sta_connected ? "正常" : json_escape_utf8(sta_reason_text(g_sta_last_disconnect_reason), 80).c_str(),
                   static_cast<long long>(esp_timer_get_time() / 1000000),
                   static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
                   g_display.width(),
@@ -2162,7 +2262,7 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
             ++g_sta_retry_count;
             if (g_sta_retry_count >= 3) {
                 ESP_LOGW(kTag, "station disconnected, reason=%u, wait for 10s retry", g_sta_last_disconnect_reason);
-                draw_pet_notice(kFaceAngry, "WiFi retry later");
+                post_ui_event(kUiEventWifiRetryLater);
             } else {
                 ESP_LOGW(kTag, "station disconnected, reason=%u, retrying", g_sta_last_disconnect_reason);
                 esp_wifi_connect();
@@ -2271,6 +2371,8 @@ extern "C" void app_main(void)
         nvs_ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(nvs_ret);
+    g_display_mutex = xSemaphoreCreateRecursiveMutex();
+    ESP_ERROR_CHECK(g_display_mutex == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
     ESP_ERROR_CHECK(g_display.init());
     init_colours();
     load_settings();
@@ -2294,6 +2396,9 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(start_http_server());
     g_voice_cmd_queue = xQueueCreate(8, sizeof(uint16_t));
     ESP_ERROR_CHECK(g_voice_cmd_queue == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
+    g_ui_event_queue = xQueueCreate(4, sizeof(UiEvent));
+    ESP_ERROR_CHECK(g_ui_event_queue == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
+    ESP_ERROR_CHECK(xTaskCreate(task_ui_event, "ui_event", 4096, nullptr, 4, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(xTaskCreate(task_voice_command, "voice_cmd", 6144, nullptr, 4, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK_WITHOUT_ABORT(voice_module_init(handle_voice_module_code, nullptr));
     note_activity();
